@@ -1,0 +1,32 @@
+# --- Python & Environments ---
+# Ignoriert alle venv Ordner, egal wie tief sie liegen
+**/venv/
+# Standard Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Music Server Specific (Data) ---
+# Ignoriert die heruntergeladenen Songs und Playlists in sTownload
+scripts/sTownload/Songs/
+scripts/sTownload/Playlists/
+scripts/sTownload/Playlists2/
+
+# --- Logs & OS Junk ---
+# Ignoriert Log-Dateien
+*.log
+scripts/sTownload/example.log
+.DS_Store
+thumbs.db
+
+# --- Docker ---
+# Falls du lokale Daten-Volumes für Docker nutzt, die nicht ins Git sollen
+.docker/
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+.nvim.lua
+
+# --- ZusatzPlugin -> später ---
+scripts/automediainfo/
