@@ -422,7 +422,7 @@ if __name__ == "__main__":
     #options.add_argument("--disable-gpu") seems to break under linux
     options.add_argument("--no-sandbox")
     #options.add_argument("--start-maximized")
-    #options.add_argument("--headless=new")  
+    options.add_argument("--headless=new")  
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
 
