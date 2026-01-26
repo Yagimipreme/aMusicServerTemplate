@@ -1,6 +1,7 @@
 
 from selenium.webdriver.common.by import By
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +25,20 @@ from selenium.webdriver.support import expected_conditions as EC
 
 BASE = "https://soundcloud.com"
 client_id = ""
+
+service = Service()
+
+# --- Automatischer Pfad-Check ---
+def get_browser_paths():
+    # Liste möglicher Pfade für Browser und Driver
+    browser_options = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/snap/bin/chromium"]
+    driver_options = ["/usr/bin/chromedriver", "/snap/bin/chromium.chromedriver"]
+    
+    # Finde den ersten existierenden Pfad oder nutze 'shutil.which'
+    chrome_bin = next((p for p in browser_options if os.path.exists(p)), shutil.which("chromium") or "/usr/bin/chromium")
+    driver_bin = next((p for p in driver_options if os.path.exists(p)), shutil.which("chromedriver") or "/usr/bin/chromedriver")
+    
+    return chrome_bin, driver_bin
 
 def load_config(filename="config.json"):
     global url, path, topsong, is_timed
@@ -381,6 +396,9 @@ if __name__ == "__main__":
     is_timed = False
     t_end = time.time() + 10
 
+    CHROME_BIN, DRIVER_BIN = get_browser_paths()
+    print(f"[INFO] Using Browser: {CHROME_BIN}")
+    print(f"[INFO] Using Driver: {DRIVER_BIN}")
     #Get necessary config
     load_config()
 
@@ -389,8 +407,9 @@ if __name__ == "__main__":
     if url == "":
         print("No URL set!")
         url = get_input()
-    CHROME_BIN="/usr/bin/chromium"
-    DRIVER_BIN="/usr/bin/chromedriver"
+
+    #CHROME_BIN="/usr/bin/chromium"
+    #DRIVER_BIN="/usr/bin/chromedriver"
     #Selenium Chrome Options
     options = webdriver.ChromeOptions()
     #options.add_argument("--detach")
