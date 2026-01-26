@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f4f4f9; color: #333; }
+    .container { max-width: 400px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; color: #2c3e50; font-size: 1.2rem; }
+    p { font-size: 0.9rem; color: #666; }
+    input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    button { background-color: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; }
+    button:hover { background-color: #2980b9; }
+    .status { margin-top: 10px; font-size: 0.85rem; padding: 8px; border-radius: 4px; display: none; }
+    .success { display: block; background: #d4edda; color: #155724; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>LAN Server Settings</h2>
+    <p>Paste LAN-IP from server-machine, Port=5000 by default  (i.e. <code>http://192.168.178.50:5000</code>):</p>
+    <input type="text" id="urlInput" placeholder="http://192.168.178.20:5000">
+    <button id="saveBtn">Save IP</button>
+    <div id="status" class="status">URL erfolgreich gespeichert!</div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

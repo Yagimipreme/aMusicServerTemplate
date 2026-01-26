@@ -1,0 +1,4 @@
+selenium==4.29.0
+ffmpeg-python
+yt-dlp==2025.11.12
+eyeD3==0.9.0
