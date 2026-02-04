@@ -1,7 +1,20 @@
 aMusicServer 🎵
 A powerful local automation tool to synchronize your SoundCloud likes and Spotify playlists directly to your machine. It ensures your music library is always up to date and ready for local playback or DJing.
 
-🚀 How it Works
+🚀 Quick Start for Users (No Python required)
+If you just want to use the tool without touching any code, follow these steps:
+
+Download: Go to the Releases page and download the latest MusicServerLauncher.exe.
+
+Run: Place the .exe in any folder and double-click it.
+
+Setup: Follow the on-screen instructions to set up your SoundCloud/Spotify links.
+
+Note: Your settings are stored safely in your Windows AppData folder, so they won't be lost when you update the EXE.
+
+Enjoy: The launcher handles all scripts, drivers, and dependencies internally.
+
+🌚 How it Works
 The application acts as a central launcher that manages different specialized scripts. Here is the typical workflow:
 
 1. Initial Setup
@@ -60,5 +73,6 @@ The standalone EXE is built using <b>PyInstaller</b>. It bundles the Python inte
 Download the latest MusicServerLauncher.exe from the Releases page.
 
 Place it in a folder of your choice.
+
 
 Run it and follow the on-screen instructions.
