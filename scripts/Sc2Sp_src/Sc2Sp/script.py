@@ -4,6 +4,9 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service as ChromeService
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import csv
@@ -12,6 +15,9 @@ import subprocess
 import shutil
 import json
 import random
+import sys
+import subprocess
+from pathlib import Path
 import re
 import argparse
 import glob
@@ -28,34 +34,59 @@ client_id = ""
 
 service = Service()
 
-# --- Automatischer Pfad-Check ---
-def get_browser_paths():
-    # Liste möglicher Pfade für Browser und Driver
-    browser_options = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/snap/bin/chromium"]
-    driver_options = ["/usr/bin/chromedriver", "/snap/bin/chromium.chromedriver"]
+def run_ffmpeg_to_mp3(m3u8, mp3_path, art_out_path=None):
+    # Wir holen uns die ffmpeg.exe, die wir in der .spec definiert haben
+    ffmpeg_bin = resource_path("ffmpeg.exe")
     
-    # Finde den ersten existierenden Pfad oder nutze 'shutil.which'
-    chrome_bin = next((p for p in browser_options if os.path.exists(p)), shutil.which("chromium") or "/usr/bin/chromium")
-    driver_bin = next((p for p in driver_options if os.path.exists(p)), shutil.which("chromedriver") or "/usr/bin/chromedriver")
+    # Unter Windows sind Anführungszeichen um Pfade wichtig, 
+    # subprocess.run mit einer Liste erledigt das sauber für uns.
+    cmd = [
+        ffmpeg_bin,
+        '-y',               # Überschreiben ohne Nachfrage
+        '-i', m3u8,         # Input Stream
+        '-c', 'copy',       # Falls möglich, Stream nur kopieren (schneller)
+        '-bsf:a', 'aac_adtstoasc', # Fix für m3u8 zu mp3/m4a
+        mp3_path
+    ]
     
-    return chrome_bin, driver_bin
+    # Falls du das Cover direkt einbetten willst, kämen hier weitere Flags.
+    # Für den Anfang reicht der einfache Download:
+    subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
-def load_config(filename="config.json"):
+def get_browser_paths():
+    # Use manager for WIN-machines
+    driver_path = ChromeDriverManager().install()
+    return None, driver_path
+
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+def get_config_path():
+    # Dieser Pfad muss exakt identisch mit dem im Launcher sein!
+    appdata = os.getenv('APPDATA')
+    config_dir = os.path.join(appdata, "MusicServerTemp")
+    # Wir stellen sicher, dass der Ordner existiert
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir, exist_ok=True)
+    return os.path.join(config_dir, "config.json")
+
+def load_config():
     global url, path, topsong, is_timed
+    filename = get_config_path()
     try:
-        with open(filename, "r") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             config = json.load(f)
-            url = config.get("url", "")
-            path = config.get("path", "")
+            # WICHTIG: Nutze die Keys, die der Launcher schreibt!
+            # Im Launcher-Code oben haben wir "sc_profile" und "song_dir" genutzt.
+            url = config.get("sc_profile", "") 
+            path = config.get("song_dir", "")
             topsong = config.get("topsong", "")
-            is_playlist = config.get("playlist", "0")
-            if topsong == "":
-                is_timed = True
-            else:
-                is_timed = config.get("is_timed", False)
-            print(f"Config loaded : url={url}, path={path}, topsong={topsong}, is_timed={is_timed}")
+            # ... restliche Logik ...
+            print(f"Config loaded from AppData: url={url}, path={path}")
     except FileNotFoundError:
-        print("Config file not found.")
+        print(f"CRITICAL: Config not found at {filename}")
 
 from urllib.parse import urljoin, urlparse, urlunparse, unquote
 
@@ -136,12 +167,18 @@ def set_topsong(topsong):
 def set_timed():
     pass
 
-def write_to_config(data, pos, filename="config.json"):
-    with open(filename, "r") as f:
-        config = json.load(f)
-        config[pos] = data
-        with open(filename, "w") as f:
-            json.dump(config, f, ensure_ascii=False, indent=4)
+def write_to_config(data, pos):
+    filename = get_config_path()
+    # Falls Datei fehlt, leeres Gerüst erstellen
+    if not os.path.exists(filename):
+        config = {}
+    else:
+        with open(filename, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            
+    config[pos] = data
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
 
 def wait_for_download(path, timeout=300):
     seconds = 0
@@ -290,24 +327,27 @@ def on_item(title, href, out_dir):
     return executor.submit(downloader.process_track, href, client_id, out_dir, title_override=title)
 
 def process_track(href: str, client_id: str, out_dir: str = ".", title_override: str | None = None) -> dict:
-    """
-    End-to-End: resolve -> Cover laden -> m3u8 holen -> ffmpeg -> MP3.
-    Gibt Pfade zurück.
-    """
-    out_dir=_ensure_dir(out_dir)
+    # 1. Pfad normalisieren (Wichtig für Windows!)
+    # Verwandelt z.B. "~/Music" oder relative Pfade in saubere Windows-Pfade
+    out_dir = str(Path(out_dir).expanduser().resolve())
+    os.makedirs(out_dir, exist_ok=True)
+
     track = resolve_track(href, client_id)
     title = title_override or track.get("title") or "track"
     base = slugify(title)
-    os.makedirs(out_dir, exist_ok=True)
 
     cover = os.path.join(out_dir, f"{base}.jpg")
+    # Hier sicherstellen, dass pick_hls_transcoding intern auch saubere Pfade nutzt
     transcoding = pick_hls_transcoding(track, art_out_path=cover)
     m3u8 = get_playback_m3u8_url(transcoding["url"], client_id, track.get("track_authorization"))
 
     mp3 = os.path.join(out_dir, f"{base}.mp3")
-    # Idempotenz: wenn schon vorhanden, überspringen (optional)
+    
     if not os.path.exists(mp3):
+        print(f"[PROCESS] Downloading: {title}")
         run_ffmpeg_to_mp3(m3u8, mp3, art_out_path=cover)
+    else:
+        print(f"[SKIP] Already exists: {title}")
 
     return {"title": title, "mp3": mp3, "cover": cover, "m3u8": m3u8}
 
@@ -373,47 +413,51 @@ def grab_client_id2(driver):
     return client_id
 
 if __name__ == "__main__":
+     
     parser = argparse.ArgumentParser()
-    parser.add_argument("-s", help="full path to spotify-local-dir", type=str)
-    parser.add_argument("-t", help="set topsong, script will only download songs listed above", type=str)
+    parser.add_argument("-s", dest="spotify_dir",help="full path to spotify-local-dir", type=str)
+    parser.add_argument("-t", dest="topsong",help="set topsong, script will only download songs listed above", type=str)
     args = parser.parse_args()
 
-    #Parsing arguments
-    if args.s :
-        print(f"setting spotify-dir to :{args.s}")
-        path = args.s
-        write_to_config(data=path, pos="path")
-
-    if args.t :
-        print(f"setting topsong to :{args.t}")
-        topsong = args.t
-        write_to_config(data=topsong, pos="topsong")
-
-    #url = "https://soundcloud.com/user352647366/likes"
+    # 1. Variablen Defaults
+    url = ""
     path = ""
-    playlist = "0"
     topsong = ""
+    playlist = "0"
     is_timed = False
-    t_end = time.time() + 10
 
-    CHROME_BIN, DRIVER_BIN = get_browser_paths()
-    print(f"[INFO] Using Browser: {CHROME_BIN}")
-    print(f"[INFO] Using Driver: {DRIVER_BIN}")
-    #Get necessary config
+    # 2. Load config
     load_config()
 
-    DOWNLOAD_DIR = _ensure_dir(path)
+    #Parsing arguments
+    if args.spotify_dir:
+        print(f"Overriding path from args: {args.spotify_dir}")
+        path = args.spotify_dir
+        write_to_config(path, "song_dir")
+    if args.topsong:
+        topsong = args.topsong
+        write_to_config(topsong, "topsong")
+
+    # 4. Sicherheitscheck für out_dir
+    if not path or path.strip() == "":
+        # Letzter Rettungsanker: Default-Ordner in AppData oder User-Music
+        path = os.path.join(os.path.expanduser("~"), "Music", "aMusicServer")
+        print(f"[WARN] No path found, using default: {path}")
+
+    CHROME_BIN, DRIVER_BIN = get_browser_paths()
 
     if url == "":
         print("No URL set!")
         url = get_input()
 
-    #CHROME_BIN="/usr/bin/chromium"
-    #DRIVER_BIN="/usr/bin/chromedriver"
+    
+
     #Selenium Chrome Options
     options = webdriver.ChromeOptions()
+
+    if CHROME_BIN and str(CHROME_BIN).strip():
+        options.binary_location = str(CHROME_BIN)
     #options.add_argument("--detach")
-    options.binary_location = CHROME_BIN
     service = Service(executable_path=DRIVER_BIN)
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     options.add_argument("--disable-popup-blocking")
@@ -422,7 +466,7 @@ if __name__ == "__main__":
     #options.add_argument("--disable-gpu") seems to break under linux
     options.add_argument("--no-sandbox")
     #options.add_argument("--start-maximized")
-    options.add_argument("--headless=new")  
+    #options.add_argument("--headless=new")  
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
 
@@ -436,8 +480,11 @@ if __name__ == "__main__":
     }
 
     #Ublock 
-    extension_path = os.path.abspath("ublock.crx")
-    options.add_extension(extension_path)
+    extension_path = resource_path("ublock.crx")
+    if os.path.exists(extension_path):
+        options.add_extension(extension_path)
+    else:
+        print(f"[WARN] ublock.crx nicht gefunden unter: {extension_path}")
 
     options.add_experimental_option("prefs", prefs)
 
@@ -461,6 +508,6 @@ if __name__ == "__main__":
         except Exception as e:
             print("[ERROR]", e)
 
-driver.quit()
+    driver.quit()
 executor.shutdown(wait=True)
 

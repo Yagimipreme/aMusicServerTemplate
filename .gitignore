@@ -1,32 +1,22 @@
-# --- Python & Environments ---
-# Ignoriert alle venv Ordner, egal wie tief sie liegen
-**/venv/
-# Standard Python Cache
+# PyInstaller & Build
+build/
+dist/
+*.spec
+*.pkg
+
+# Python Cache
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
 
-# --- Music Server Specific (Data) ---
-# Ignoriert die heruntergeladenen Songs und Playlists in sTownload
-scripts/sTownload/Songs/
-scripts/sTownload/Playlists/
-scripts/sTownload/Playlists2/
-
-# --- Logs & OS Junk ---
-# Ignoriert Log-Dateien
+# Local Configs & Logs
 *.log
-scripts/sTownload/example.log
+.env
+config.json
+
+# Binaries (Optional: Falls du ffmpeg.exe nicht im Repo willst)
+# ffmpeg.exe
+# ublock.crx
+
+# OS specific
 .DS_Store
-thumbs.db
-
-# --- Docker ---
-# Falls du lokale Daten-Volumes für Docker nutzt, die nicht ins Git sollen
-.docker/
-
-# --- IDEs & Editors ---
-.vscode/
-.idea/
-.nvim.lua
-
-# --- ZusatzPlugin -> später ---
-scripts/automediainfo/
+Thumbs.db

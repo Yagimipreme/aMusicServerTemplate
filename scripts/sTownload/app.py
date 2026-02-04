@@ -22,7 +22,7 @@ CSV_MODE = True   # True → nur CSV einlesen; False → Spotify-API Mode
 
 BASE_DIR = "/home/iqqe/Work/sTownload"
 PLAYLIST_DIR = os.path.join(BASE_DIR, "Playlists")
-SONG_DIR = os.path.join(BASE_DIR, "Songs2")
+SONG_DIR = os.path.join(BASE_DIR, "Songs")
 VENV_DIR = os.path.join(BASE_DIR, "venv")
 TESTING = True
 txt_path = os.path.join(PLAYLIST_DIR, "playlists.txt")
@@ -39,6 +39,11 @@ logging.basicConfig(filename='example.log', encoding='utf-8', level=logging.DEBU
 # ============================================================
 #  HILFSFUNKTIONEN
 # ============================================================
+
+def resource_path(relative_path):
+    """ Holt den Pfad für Ressourcen, egal ob EXE oder .py """
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
 
 def sanitize_filename(name: str) -> str:
     """Ungültige Zeichen aus Dateinamen entfernen."""
