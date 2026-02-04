@@ -1,15 +1,17 @@
-{  
-  "manifest_version": 3,  
-  "name": "HTTP Request Example",  
-  "version": "1.0",  
-  "description": "Sends an HTTP request to local server",  
-  "permissions": ["scripting", "activeTab", "storage"],  //Storage to make server-ip editeable, activeTab for direct-use
+{
+  "manifest_version": 3,
+  "name": "aMusicServer WebExt",
+  "version": "1.0",
+  "description": "Sends requests to your local music server",
+  "permissions": ["scripting", "activeTab", "storage", "permissions"], 
   "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
     "http://192.168.*/*",
     "http://10.*/*",
     "http://172.16.*/*",
-    "http://*.local" //so hostnames are available ie. "my_server"
-    ], 
+    "http://*.local/*"
+  ],
   "optional_host_permissions": [
     "http://*/*",
     "https://*/*"
@@ -26,13 +28,13 @@
     "open_in_tab": false
   },
   "browser_specific_settings": {
-  "gecko": {
-    "id": "dein-projektname@deine-domain.com",
-    "strict_min_version": "109.0"
-   }
+    "gecko": {
+      "id": "amusicserver-webext@yagimipreme.com",
+      "strict_min_version": "109.0"
+    }
   },
-  "background": {  
-    "service_worker": "background_service.js"  // Background service worker (replaces background pages in V3)  
-  } 
-
-}  
+  "background": {
+    "service_worker": "background_service.js",
+    "type": "module"
+  }
+}
