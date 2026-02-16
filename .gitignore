@@ -1,0 +1,6 @@
+**venv/**
+example.log
+__pycache__/
+*.log
+*.mp3
+*.jpg

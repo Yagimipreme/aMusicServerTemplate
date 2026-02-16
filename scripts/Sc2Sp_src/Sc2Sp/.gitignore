@@ -1,0 +1,10 @@
+__pycache__/
+venv/
+out/
+artworks/
+.vscode/
+testscript.py
+debug.html
+config.json
+TODO
+ublock.crx
