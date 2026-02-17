@@ -290,17 +290,35 @@ def write_m3u(m3u_name: str, mp3_path: str):
 
 
 def main(argv):
-    if len(argv) < 1:
+    # Filtert alle Flags (Strings die mit '-' beginnen) aus den Argumenten
+    # argv[0] ist der Skriptname, argv[1:] sind die übergebenen Werte
+    clean_args = [a for a in argv[1:] if not a.startswith('-')]
+
+    if len(clean_args) < 1:
+        logger.error('Keine URL in den Argumenten gefunden. Erhalten: %s', argv)
         print('Usage: script_web.py <url> [m3u]')
         return 2
-    url = argv[1]
-    m3u = argv[2] if len(argv) > 2 else None
+    
+    # Die URL ist nun das erste Argument, das kein Flag ist
+    url = clean_args[0]
+    
+    # Das M3U-Argument ist das zweite (falls vorhanden)
+    m3u = clean_args[1] if len(clean_args) > 1 else None
+    
+    # Falls das M3U-Argument durch das -one Flag "verschluckt" wurde, 
+    # nehmen wir den Wert aus dem ursprünglichen argv, falls dort noch etwas ist
+    if not m3u and len(argv) > 3:
+         m3u = argv[3]
+
     out_dir = get_config_song_dir()
-    logger.info('SC download request: %s', url)
+    logger.info('SC download request: %s (M3U: %s)', url, m3u)
+    
     down = download_single_soundcloud(url, out_dir)
+    
     if not down:
         logger.error('No file downloaded for %s', url)
         return 1
+        
     logger.info('Downloaded: %s', down)
     if m3u:
         write_m3u(m3u, down)

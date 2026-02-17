@@ -83,7 +83,7 @@ document.getElementById('sendBtn').addEventListener('click', () => {
         })
         .then(resp => {
           if (!resp.ok) throw new Error('Server antwortete mit ' + resp.status);
-          alert("Erfolgreich gesendet!");
+          
         })
         .catch(err => {
           console.error('Send failed', err && err.name, err && err.message, err);
@@ -107,19 +107,14 @@ document.getElementById('sendBtn').addEventListener('click', () => {
                   console.log('Alt diagnostic GET', gresp.status, gresp.statusText);
                   return fetch(altTarget, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 })
-                .then(resp2 => {
-                  if (!resp2.ok) throw new Error('Server antwortete mit ' + resp2.status);
-                  alert('Erfolgreich gesendet (via alt host)!');
-                })
                 .catch(altErr => {
                   console.error('Alt-host attempt failed', altErr);
                   // As last resort try no-cors fire-and-forget to give server a chance
                   fetch(altTarget, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) })
-                    .then(() => alert('Failed to fetch normally; attempted no-cors fallback. Check server log.'))
+                    
                     .catch(fallbackErr => {
                       console.error('Fallback also failed', fallbackErr);
-                      alert('Fehler beim Senden: ' + (err && err.message ? err.message : err));
-                    });
+                                          });
                 });
               return;
             }

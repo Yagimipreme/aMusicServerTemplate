@@ -87,19 +87,25 @@ class SimpleHandler(BaseHTTPRequestHandler):
                         # prepare argv for the executed script
                         ffmpeg_dir = getattr(sys, '_MEIPASS', os.path.abspath("."))
                         old_path = os.environ.get("PATH", "")
-                        if ffmpeg_dir not in old_path:
+                        import shutil
+                        if shutil.which("ffmpeg") is None:
+                            if ffmpeg_dir not in old_path:
+                                os.environ["PATH"] = ffmpeg_dir + os.pathsep + old_path
+                                logger.info("Added local directory to PATH")
+
                             os.environ["PATH"] = ffmpeg_dir + os.pathsep + old_path
                             logger.info('Added ffmpeg directory to PATH: %s', ffmpeg_dir)
                         old_argv = sys.argv[:]
                         old_cwd = os.getcwd()
                         added_to_path = False
                         try:
-                            if sc_flag:
+                            if "soundcloud" in url_arg:
                                 sys.argv = [path, "-one", url_arg]
-                            sys.argv = [path, url_arg, m3u_arg]
-                            if script_dir not in sys.path:
-                                sys.path.insert(0, script_dir)
-                                added_to_path = True
+                            else:
+                                sys.argv = [path, url_arg, m3u_arg]
+                                #if script_dir not in sys.path:
+                                #    sys.path.insert(0, script_dir)
+                                #    added_to_path = True
                             os.chdir(script_dir)
                             logger.info('Executing script in-thread: %s', path)
                             runpy.run_path(path, run_name='__main__')
@@ -215,3 +221,6 @@ def start_background_server(port=5000):
         logger.info('Server stopped by KeyboardInterrupt')
     except Exception:
         logger.exception('Server encountered an error')
+
+if __name__ == "__main__":
+    start_background_server(port=5000)
