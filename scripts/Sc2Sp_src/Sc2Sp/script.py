@@ -290,9 +290,13 @@ if __name__ == '__main__':
         print('No sc_username set in config!')
         url = get_input()
 
-    # Chrome setup
-    driver_path = ChromeDriverManager().install()
-    service     = Service(executable_path=driver_path)
+    # Chrome setup — prefer system chromedriver (version-matched by pacman)
+    # over webdriver_manager's cached binary which can lag behind Chromium.
+    system_cd = shutil.which('chromedriver')
+    if system_cd:
+        service = Service(executable_path=system_cd)
+    else:
+        service = Service(executable_path=ChromeDriverManager().install())
 
     options = webdriver.ChromeOptions()
     options.add_argument('--headless=new')
@@ -310,6 +314,14 @@ if __name__ == '__main__':
         'download.directory_upgrade': True,
         'safebrowsing.enabled': True,
     })
+
+    chromium_bin = (
+        shutil.which('chromium') or
+        shutil.which('chromium-browser') or
+        shutil.which('google-chrome')
+    )
+    if chromium_bin:
+        options.binary_location = chromium_bin
 
     ublock_path = os.path.join(_PROJECT_ROOT, 'ublock.crx')
     if os.path.exists(ublock_path):

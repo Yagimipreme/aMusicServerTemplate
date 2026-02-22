@@ -87,8 +87,8 @@ def sanitize_request_url(u: str) -> str:
 
 def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
     """Open Chrome headless, sniff network logs for a SoundCloud client_id."""
-    if webdriver is None or ChromeDriverManager is None:
-        logger.warning('Selenium or webdriver_manager not available')
+    if webdriver is None:
+        logger.warning('[SC-SELENIUM] Selenium not available')
         return None
 
     options = ChromeOptions()
@@ -98,11 +98,35 @@ def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
     options.add_argument('--disable-dev-shm-usage')
     options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
-    try:
+    # Prefer the system chromedriver — on Arch/Debian it is kept version-matched
+    # to the installed browser by the package manager.  webdriver_manager caches
+    # a specific version that can become stale (e.g. v114 vs Chromium 145).
+    system_cd = shutil.which('chromedriver')
+    if system_cd:
+        logger.debug('[SC-SELENIUM] Using system chromedriver: %s', system_cd)
+        service = ChromeService(system_cd)
+    elif ChromeDriverManager is not None:
+        logger.debug('[SC-SELENIUM] System chromedriver not found, using webdriver_manager')
         service = ChromeService(ChromeDriverManager().install())
+    else:
+        logger.error('[SC-SELENIUM] No chromedriver available')
+        return None
+
+    # Also resolve the browser binary explicitly so Selenium finds Chromium
+    # even when the system uses a non-standard name (chromium vs google-chrome).
+    chromium_bin = (
+        shutil.which('chromium') or
+        shutil.which('chromium-browser') or
+        shutil.which('google-chrome')
+    )
+    if chromium_bin:
+        options.binary_location = chromium_bin
+        logger.debug('[SC-SELENIUM] Browser binary: %s', chromium_bin)
+
+    try:
         driver = webdriver.Chrome(service=service, options=options)
     except Exception:
-        logger.exception('Failed to start ChromeDriver')
+        logger.exception('[SC-SELENIUM] Failed to start ChromeDriver')
         return None
 
     try:
