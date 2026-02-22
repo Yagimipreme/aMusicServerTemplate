@@ -145,22 +145,36 @@ def _refresh_sc_client_id_loop(period_seconds=3600):
     Best-effort: failures are logged and ignored.
     """
     script_fp = os.path.join(_PROJECT_ROOT, 'scripts/Sc2Sp_src/script_web.py')
+    cycle = 0
 
     while True:
+        cycle += 1
+        logger.info('[SC-REFRESH] Cycle %d starting (interval=%ds)', cycle, period_seconds)
+
         try:
-            if os.path.exists(script_fp):
+            if not os.path.exists(script_fp):
+                logger.warning('[SC-REFRESH] sc2 helper not found at: %s', script_fp)
+            else:
+                logger.debug('[SC-REFRESH] Loading sc2 helper: %s', script_fp)
                 spec   = importlib.util.spec_from_file_location('sc2_web_helper', script_fp)
                 module = importlib.util.module_from_spec(spec)
                 try:
                     spec.loader.exec_module(module)
+                    logger.debug('[SC-REFRESH] sc2 helper loaded OK')
                 except Exception:
-                    logger.exception('Failed importing sc2 helper module')
+                    logger.exception('[SC-REFRESH] Failed to load sc2 helper module')
                     module = None
 
-                if module and hasattr(module, 'fetch_client_id_via_selenium'):
+                if module is None:
+                    logger.warning('[SC-REFRESH] Skipping cycle %d — module load failed', cycle)
+                elif not hasattr(module, 'fetch_client_id_via_selenium'):
+                    logger.warning('[SC-REFRESH] fetch_client_id_via_selenium not found in module')
+                else:
+                    logger.info('[SC-REFRESH] Launching headless Chrome to fetch client_id …')
                     try:
                         cid = module.fetch_client_id_via_selenium()
                         if cid:
+                            logger.info('[SC-REFRESH] Got client_id: %s…%s', cid[:4], cid[-4:])
                             try:
                                 cfg = {}
                                 if os.path.exists(_CONFIG_PATH):
@@ -170,16 +184,17 @@ def _refresh_sc_client_id_loop(period_seconds=3600):
                                 cfg['sc_client_id_ts'] = int(time.time())
                                 with open(_CONFIG_PATH, 'w', encoding='utf-8') as f:
                                     json.dump(cfg, f, ensure_ascii=False, indent=2)
-                                logger.info('Persisted sc_client_id from background refresher')
+                                logger.info('[SC-REFRESH] Persisted sc_client_id to config')
                             except Exception:
-                                logger.exception('Failed to persist sc_client_id')
+                                logger.exception('[SC-REFRESH] Failed to persist sc_client_id')
+                        else:
+                            logger.warning('[SC-REFRESH] fetch_client_id_via_selenium returned None — token unchanged')
                     except Exception:
-                        logger.exception('fetch_client_id_via_selenium failed')
-            else:
-                logger.debug('sc2 helper not found for client_id refresh: %s', script_fp)
+                        logger.exception('[SC-REFRESH] fetch_client_id_via_selenium raised an exception')
         except Exception:
-            logger.exception('Unhandled error in sc_client_id refresher')
+            logger.exception('[SC-REFRESH] Unhandled error in cycle %d', cycle)
 
+        logger.info('[SC-REFRESH] Cycle %d done — sleeping %ds', cycle, period_seconds)
         time.sleep(period_seconds)
 
 
