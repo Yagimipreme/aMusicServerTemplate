@@ -86,11 +86,14 @@ class SimpleHandler(BaseHTTPRequestHandler):
                         if shutil.which('ffmpeg') is None:
                             logger.warning('ffmpeg not found on PATH')
 
+                        # Ensure the script's directory is on sys.path so
+                        # relative package imports (e.g. "import Sc2Sp.script2")
+                        # work when the file is loaded via runpy.
+                        if script_dir not in sys.path:
+                            sys.path.insert(0, script_dir)
+
                         try:
-                            if 'soundcloud' in url_arg:
-                                sys.argv = [path, '-one', url_arg]
-                            else:
-                                sys.argv = [path, url_arg, m3u_arg]
+                            sys.argv = [path, url_arg, m3u_arg]
                             os.chdir(script_dir)
                             logger.info('Executing script in-thread: %s', path)
                             runpy.run_path(path, run_name='__main__')
