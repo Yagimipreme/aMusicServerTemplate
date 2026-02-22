@@ -106,23 +106,43 @@ def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
         return None
 
     try:
-        driver.get(target_url or 'https://soundcloud.com/')
+        # Must be called before navigating; without this Chrome does not
+        # record Network.requestWillBeSent events in the performance log.
+        driver.execute_cdp_cmd('Network.enable', {})
+        logger.debug('[SC-SELENIUM] Network.enable sent')
+
+        target = target_url or 'https://soundcloud.com/'
+        logger.debug('[SC-SELENIUM] Navigating to %s', target)
+        driver.get(target)
         time.sleep(3)
 
         client_id = None
         try:
-            for entry in driver.get_log('performance'):
+            entries = driver.get_log('performance')
+            logger.debug('[SC-SELENIUM] Performance log entries: %d', len(entries))
+
+            api_hits = 0
+            for entry in entries:
                 msg = json.loads(entry.get('message', '{}')).get('message', {})
                 if msg.get('method') == 'Network.requestWillBeSent':
                     url = msg.get('params', {}).get('request', {}).get('url', '')
-                    if 'api-v2.soundcloud.com' in url and 'client_id=' in url:
-                        m = re.search(r'client_id=([A-Za-z0-9_-]+)', url)
-                        if m:
-                            client_id = m.group(1)
-                            logger.info('Found client_id via Selenium: %s', client_id)
-                            break
+                    if 'api-v2.soundcloud.com' in url:
+                        api_hits += 1
+                        if 'client_id=' in url:
+                            m = re.search(r'client_id=([A-Za-z0-9_-]+)', url)
+                            if m:
+                                client_id = m.group(1)
+                                logger.info('[SC-SELENIUM] Found client_id: %s', client_id)
+                                break
+
+            if client_id is None:
+                logger.warning(
+                    '[SC-SELENIUM] client_id not found — '
+                    'total log entries: %d, api-v2 hits: %d',
+                    len(entries), api_hits,
+                )
         except Exception:
-            logger.exception('Failed to read performance logs')
+            logger.exception('[SC-SELENIUM] Failed to read performance logs')
 
         return client_id
     finally:
