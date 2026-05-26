@@ -24,8 +24,12 @@ set VERSION=%VERSION: =%
 echo [build] aMusicServer v%VERSION%
 
 REM ── 2. PyInstaller ───────────────────────────────────────────────────────
+REM --distpath ..\dist and --workpath ..\build put outputs at the project
+REM root (rather than under windows\), matching what installer.iss expects.
 echo [build] running PyInstaller...
-python -m PyInstaller --clean --noconfirm musicserver.spec || goto :err
+python -m PyInstaller --clean --noconfirm ^
+       --distpath ..\dist --workpath ..\build ^
+       musicserver.spec || goto :err
 if not exist "..\dist\aMusicServer\aMusicServer.exe" (
     echo [build] PyInstaller output missing
     goto :err
