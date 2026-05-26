@@ -79,76 +79,131 @@ import urllib.parse
 from yt_dlp import YoutubeDL
 
 
-def download_single(url: str, out_dir: str) -> str | None:
-    """
-    Downloads a single URL as MP3 with embedded thumbnail.
-    Works on headless Debian servers.
-    Returns path to final mp3 file or None if failed.
-    """
+# A YouTube playlist landing page is /playlist?list=…  — that's the only
+# pattern we treat as "give me every track". A /watch?v=X URL that also
+# carries a &list= parameter is still a single song (the user is watching
+# one track from inside a playlist context).
+PLAYLIST_URL_RE = re.compile(r'youtube\.com/playlist\?', re.IGNORECASE)
 
+# Anything yt-dlp / ffmpeg may leave behind that ISN'T the final mp3.
+JUNK_EXTS = (
+    '.part', '.webp', '.jpg', '.jpeg', '.png',
+    '.mp4', '.mkv', '.m4a', '.webm', '.opus', '.temp.mp3',
+)
+
+
+def _is_playlist_url(url: str) -> bool:
+    """True only for /playlist?list= URLs. /watch?v=X&list=Y stays single-video."""
+    return bool(PLAYLIST_URL_RE.search(url)) and '/watch' not in url.lower()
+
+
+def _cleanup_orphans(out_dir: str, since_ts: float):
+    """Remove non-mp3 download artifacts created during this request.
+
+    We use mtime > since_ts so we never touch files from other downloads
+    or pre-existing music in the same folder.
+    """
+    try:
+        for fn in os.listdir(out_dir):
+            full = os.path.join(out_dir, fn)
+            try:
+                if not os.path.isfile(full):
+                    continue
+                if os.path.getmtime(full) < since_ts:
+                    continue
+            except OSError:
+                continue
+            low = fn.lower()
+            if any(low.endswith(e) for e in JUNK_EXTS):
+                try:
+                    os.remove(full)
+                    logger.info('cleanup: removed %s', fn)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def download_url(url: str, out_dir: str) -> tuple[str | None, list[str]]:
+    """
+    Download a URL (single YouTube video or whole playlist) to mp3.
+
+    Returns (playlist_title_if_any, [mp3_paths]). For single-video URLs the
+    first element is None and the list has at most one path. For playlist URLs
+    the first element is the playlist's name (useful as the m3u file name)
+    and the list has one path per track that downloaded successfully.
+
+    Audio-only streams only — no fallback to muxed video. If a URL has no
+    audio-only stream available, yt-dlp will error instead of pulling a
+    full video file just to discard the picture afterwards.
+    """
     os.makedirs(out_dir, exist_ok=True)
+    is_playlist = _is_playlist_url(url)
+    started = time.time()
 
-    # Resolve ffmpeg location
     ffmpeg_path = shutil.which("ffmpeg")
     ffmpeg_location = os.path.dirname(ffmpeg_path) if ffmpeg_path else None
 
     ydl_opts = {
-        # Audio selection
-        "format": "bestaudio/best",
-        "noplaylist": True,
+        # Prefer pure audio streams; fall back to small (≤480p) video if no
+        # audio-only stream exists (very old YouTube uploads only ship muxed
+        # streams). FFmpegExtractAudio strips the video track during the MP3
+        # conversion either way, so the final mp3 is identical — this just
+        # keeps the intermediate download small.
+        "format": "bestaudio/best[height<=480]/best",
+        "noplaylist": not is_playlist,
 
-        # Output
         "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
-
-        # Clean console
         "quiet": True,
         "no_warnings": True,
-
-        # Stability
         "retries": 10,
         "concurrent_fragment_downloads": 5,
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
 
-        # Extractor tweaks (helps avoid YouTube issues)
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"]
-            }
-        },
-
-        # Post-processing: Convert to MP3 + embed thumbnail
         "writethumbnail": True,
         "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            },
-            {
-                "key": "EmbedThumbnail",
-            },
-            {
-                "key": "FFmpegMetadata",
-            },
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"},
+            {"key": "FFmpegThumbnailsConvertor", "format": "jpg"},
+            {"key": "EmbedThumbnail"},
+            {"key": "FFmpegMetadata"},
         ],
     }
-
     if ffmpeg_location:
         ydl_opts["ffmpeg_location"] = ffmpeg_location
+
+    mp3_paths: list[str] = []
+    playlist_title: str | None = None
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
-            # After conversion, extension is always mp3
-            filename = ydl.prepare_filename(info)
-            base, _ = os.path.splitext(filename)
-            final_path = base + ".mp3"
+            if is_playlist:
+                playlist_title = info.get('title')
+                entries = info.get('entries') or []
+            else:
+                entries = [info]
 
-            return final_path if os.path.exists(final_path) else None
-
+            for entry in entries:
+                if not entry:
+                    continue
+                fn = ydl.prepare_filename(entry)
+                base, _ = os.path.splitext(fn)
+                mp3 = base + ".mp3"
+                if os.path.exists(mp3):
+                    mp3_paths.append(mp3)
     except Exception as e:
         print(f"[ERROR] Download failed: {e}")
-        return None
+    finally:
+        _cleanup_orphans(out_dir, started)
+
+    return (playlist_title, mp3_paths)
+
+
+def download_single(url: str, out_dir: str) -> str | None:
+    """Back-compat wrapper for single-video downloads."""
+    _, paths = download_url(url, out_dir)
+    return paths[0] if paths else None
 
 # ── M3U ────────────────────────────────────────────────────────────────────────
 
@@ -197,30 +252,43 @@ def main(argv):
 
     out_dir = get_config_song_dir()
     logger.info('Downloading %s to %s', url, out_dir)
-    downloaded = download_single(url, out_dir)
+    playlist_title, downloaded = download_url(url, out_dir)
 
     if not downloaded:
         logger.error('No file downloaded for %s', url)
         return 1
 
-    logger.info('Downloaded: %s', downloaded)
+    # Pick the m3u name: explicit selection wins; otherwise, for YouTube
+    # playlist URLs we fall back to the playlist's own title (so sending the
+    # /playlist?list= URL with no playlist selected still produces a useful
+    # m3u file named after the playlist).
+    explicit_m3u = (m3u or '').strip()
+    if explicit_m3u and explicit_m3u.lower() != 'default_playlist':
+        m3u_name = explicit_m3u
+    elif playlist_title:
+        m3u_name = playlist_title
+    else:
+        m3u_name = None
 
-    if m3u and m3u.strip() and m3u.strip().lower() != 'default_playlist':
-        write_m3u(m3u, downloaded)
+    logger.info('Downloaded %d file(s); m3u=%s', len(downloaded), m3u_name or '(none)')
 
-    if eyed3:
-        try:
-            audio = eyed3.load(downloaded)
-            if audio and audio.tag is None:
-                audio.initTag()
-            if audio and audio.tag is not None:
-                audio.tag.title = os.path.splitext(os.path.basename(downloaded))[0]
-                audio.tag.save()
-        except Exception:
-            logger.exception('Tagging failed')
+    for path in downloaded:
+        logger.info('  - %s', os.path.basename(path))
+        if m3u_name:
+            write_m3u(m3u_name, path)
+        # Only set a title tag if yt-dlp's FFmpegMetadata didn't already.
+        if eyed3:
+            try:
+                audio = eyed3.load(path)
+                if audio and audio.tag is None:
+                    audio.initTag()
+                if audio and audio.tag is not None and not audio.tag.title:
+                    audio.tag.title = os.path.splitext(os.path.basename(path))[0]
+                    audio.tag.save()
+            except Exception:
+                logger.exception('Tagging failed for %s', path)
 
     trigger_navidrome_scan()
-
     return 0
 
 

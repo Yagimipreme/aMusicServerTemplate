@@ -232,7 +232,9 @@ def _yt_dlp_fallback(url: str, out_dir: str) -> str | None:
         ffmpeg_location = os.path.dirname(ffmpeg_location)
 
     ydl_opts = {
-        'format': 'bestaudio/best',
+        # Audio-only with low-resolution video fallback — see
+        # sTownload/script_web.py for the rationale.
+        'format': 'bestaudio/best[height<=480]/best',
         'noplaylist': True,
         'outtmpl': os.path.join(out_dir, '%(title)s.%(ext)s'),
         'writethumbnail': True,

@@ -67,7 +67,9 @@ def get_song(search_query: str, output_title: str) -> bool:
     logger.info("Starting yt-dlp on: %s", search_query)
 
     yt_opts = {
-        'format': 'bestaudio/best',
+        # Prefer audio-only stream; fall back to small video if the video
+        # has no separate audio track. Final mp3 is identical either way.
+        'format': 'bestaudio/best[height<=480]/best',
         'noplaylist': True,
         'outtmpl': os.path.join(DOWNLOAD_DIR, output_title + ".%(ext)s"),
         'writethumbnail': True,
