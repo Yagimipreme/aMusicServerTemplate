@@ -2,10 +2,15 @@
 REM Build the Windows release: PyInstaller bundle + Inno Setup installer.
 REM
 REM Prereqs (one-time):
-REM   py -m pip install -r ..\requirements.txt pyinstaller pystray pillow
+REM   python -m pip install -r ..\requirements.txt pyinstaller pystray pillow
 REM   Install Inno Setup 6 from https://jrsoftware.org/isinfo.php
 REM
 REM Run from this folder:  cd windows && build.bat
+REM
+REM Uses `python` (not `py`) so that CI runners and users with a single
+REM Python in PATH both pick up the intended interpreter. `py.exe` resolves
+REM to the highest-numbered registered Python and can skip the one
+REM PyInstaller was installed into.
 
 setlocal EnableDelayedExpansion
 pushd "%~dp0"
@@ -20,7 +25,7 @@ echo [build] aMusicServer v%VERSION%
 
 REM ── 2. PyInstaller ───────────────────────────────────────────────────────
 echo [build] running PyInstaller...
-py -m PyInstaller --clean --noconfirm musicserver.spec || goto :err
+python -m PyInstaller --clean --noconfirm musicserver.spec || goto :err
 if not exist "..\dist\aMusicServer\aMusicServer.exe" (
     echo [build] PyInstaller output missing
     goto :err
