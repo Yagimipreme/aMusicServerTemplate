@@ -1,25 +1,44 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <style>
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f4f4f9; color: #333; }
-    .container { max-width: 400px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .container { max-width: 440px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
     h2 { margin-top: 0; color: #2c3e50; font-size: 1.2rem; }
-    p { font-size: 0.9rem; color: #666; }
+    p { font-size: 0.9rem; color: #666; line-height: 1.5; }
+    code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
     input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-    button { background-color: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; }
+    .btn-row { display: flex; gap: 8px; margin: 10px 0 0; }
+    button { background-color: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; flex: 1; }
     button:hover { background-color: #2980b9; }
+    button.secondary { background-color: #e6e6fa; color: #4a4a6a; border: 1px solid #b8b8d8; }
+    button.secondary:hover { background-color: #d6d6ec; }
     .status { margin-top: 10px; font-size: 0.85rem; padding: 8px; border-radius: 4px; display: none; }
     .success { display: block; background: #d4edda; color: #155724; }
+    .test-result { margin-top: 10px; font-size: 0.85rem; padding: 8px; border-radius: 4px; display: none; }
+    .test-result.show { display: block; }
+    .test-result.ok  { background: #d4edda; color: #155724; }
+    .test-result.err { background: #f8d7da; color: #721c24; }
+    .test-result.pending { background: #eef; color: #345; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h2>LAN Server Settings</h2>
-    <p>Paste LAN-IP from server-machine, Port=5000 by default  (i.e. <code>http://192.168.178.50:5000</code>):</p>
-    <input type="text" id="urlInput" placeholder="http://192.168.178.20:5000">
-    <button id="saveBtn">Save IP</button>
+    <h2>Server Settings</h2>
+    <p>
+      URL the extension posts song requests to. Default <code>localhost</code>
+      works if the extension and server run on the same machine.
+      For multi-machine setups on the same LAN, prefer the server's mDNS name
+      (e.g. <code>http://homeserver.local:5000</code>) — it survives DHCP
+      address changes. Click <strong>Test connection</strong> to verify before saving.
+    </p>
+    <input type="text" id="urlInput" placeholder="http://localhost:5000">
+    <div class="btn-row">
+      <button id="testBtn" class="secondary" type="button">Test connection</button>
+      <button id="saveBtn">Save</button>
+    </div>
+    <div id="testResult" class="test-result"></div>
     <div id="status" class="status">URL erfolgreich gespeichert!</div>
   </div>
   <script src="options.js"></script>

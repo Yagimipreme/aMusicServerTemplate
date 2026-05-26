@@ -130,12 +130,69 @@ class SimpleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            # Route on path so we can serve the extension's "pull playlists"
+            # button without exposing Navidrome creds to the browser side.
+            if self.path.rstrip('/') == '/playlists':
+                return self._get_playlists()
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "ok", "pid": os.getpid(), "cwd": os.getcwd()}).encode())
         except Exception:
             logger.exception('GET failed')
             self._set_headers(500)
             self.wfile.write(json.dumps({"status": "error"}).encode())
+
+    def _get_playlists(self):
+        """Proxy Navidrome's getPlaylists.view → minimal JSON for the extension."""
+        import urllib.parse as _up
+        import urllib.request as _ur
+
+        try:
+            cfg = {}
+            if os.path.exists(_CONFIG_PATH):
+                with open(_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+        except Exception:
+            logger.exception('GET /playlists: could not read config')
+            cfg = {}
+
+        host = cfg.get('navidrome_url', 'http://localhost:4533')
+        nuser = cfg.get('navidrome_user', '')
+        npw   = cfg.get('navidrome_pass', '')
+        if not nuser or not npw:
+            self._set_headers(503)
+            self.wfile.write(json.dumps({
+                "status": "error",
+                "error": "navidrome credentials not configured in config.json",
+            }).encode())
+            return
+
+        params = _up.urlencode({
+            'u': nuser, 'p': npw, 'v': '1.16.1', 'c': 'amusicserver-ext', 'f': 'json'
+        })
+        url = f"{host}/rest/getPlaylists.view?{params}"
+        try:
+            with _ur.urlopen(url, timeout=8) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            logger.exception('GET /playlists: upstream call failed')
+            self._set_headers(502)
+            self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode())
+            return
+
+        sr = data.get('subsonic-response', {})
+        if sr.get('status') != 'ok':
+            err = sr.get('error', {}).get('message', 'unknown navidrome error')
+            self._set_headers(502)
+            self.wfile.write(json.dumps({"status": "error", "error": err}).encode())
+            return
+
+        raw = sr.get('playlists', {}).get('playlist', []) or []
+        playlists = [
+            {"name": p.get("name", ""), "songCount": p.get("songCount", 0)}
+            for p in raw if p.get("name")
+        ]
+        self._set_headers(200)
+        self.wfile.write(json.dumps({"status": "ok", "playlists": playlists}).encode())
 
 
 # ── SoundCloud client_id background refresher ──────────────────────────────────

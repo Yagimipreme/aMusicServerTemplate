@@ -153,15 +153,36 @@ def download_single(url: str, out_dir: str) -> str | None:
 # ── M3U ────────────────────────────────────────────────────────────────────────
 
 def write_m3u(m3u_name: str, mp3_path: str):
+    """Append a track to the named .m3u playlist (create with #EXTM3U if absent).
+
+    The extension passes names like 'MyHits.m3u'; CLI callers may pass 'MyHits'
+    — tolerate both. Deduplicates so re-sending the same URL doesn't double-add.
+    """
     safe = re.sub(r'[\\/:*?"<>|]', '_', m3u_name)
+    if safe.lower().endswith('.m3u'):
+        safe = safe[:-4]
     m3u_file = os.path.join(os.path.dirname(mp3_path), safe + '.m3u')
+    entry = os.path.basename(mp3_path)
+
+    if os.path.exists(m3u_file):
+        try:
+            with open(m3u_file, 'r', encoding='utf-8') as f:
+                if entry in f.read().splitlines():
+                    logger.info('Already in m3u, skipping: %s -> %s', entry, m3u_file)
+                    return
+        except OSError:
+            logger.exception('Could not read m3u %s', m3u_file)
+            return
+
     try:
-        with open(m3u_file, 'w', encoding='utf-8') as f:
-            f.write('#EXTM3U\n')
-            f.write(os.path.basename(mp3_path) + '\n')
-        logger.info('Wrote m3u: %s', m3u_file)
+        new_file = not os.path.exists(m3u_file)
+        with open(m3u_file, 'a', encoding='utf-8') as f:
+            if new_file:
+                f.write('#EXTM3U\n')
+            f.write(entry + '\n')
+        logger.info('Appended to m3u: %s -> %s', entry, m3u_file)
     except Exception:
-        logger.exception('Failed to write m3u')
+        logger.exception('Failed to write m3u %s', m3u_file)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

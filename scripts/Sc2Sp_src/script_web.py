@@ -276,15 +276,60 @@ def _yt_dlp_fallback(url: str, out_dir: str) -> str | None:
 # ── M3U ────────────────────────────────────────────────────────────────────────
 
 def write_m3u(m3u_name: str, mp3_path: str):
+    """Append a track to the named .m3u playlist (create with #EXTM3U if absent).
+
+    Same semantics as the sTownload variant — tolerates names with or without
+    the .m3u suffix, deduplicates against existing entries.
+    """
     safe = re.sub(r'[\\/:*?"<>|]', '_', m3u_name)
+    if safe.lower().endswith('.m3u'):
+        safe = safe[:-4]
     m3u_file = os.path.join(os.path.dirname(mp3_path), safe + '.m3u')
+    entry = os.path.basename(mp3_path)
+
+    if os.path.exists(m3u_file):
+        try:
+            with open(m3u_file, 'r', encoding='utf-8') as f:
+                if entry in f.read().splitlines():
+                    logger.info('Already in m3u, skipping: %s -> %s', entry, m3u_file)
+                    return
+        except OSError:
+            logger.exception('Could not read m3u %s', m3u_file)
+            return
+
     try:
-        with open(m3u_file, 'w', encoding='utf-8') as f:
-            f.write('#EXTM3U\n')
-            f.write(os.path.basename(mp3_path) + '\n')
-        logger.info('Wrote m3u: %s', m3u_file)
+        new_file = not os.path.exists(m3u_file)
+        with open(m3u_file, 'a', encoding='utf-8') as f:
+            if new_file:
+                f.write('#EXTM3U\n')
+            f.write(entry + '\n')
+        logger.info('Appended to m3u: %s -> %s', entry, m3u_file)
     except Exception:
-        logger.exception('Failed to write m3u')
+        logger.exception('Failed to write m3u %s', m3u_file)
+
+
+def trigger_navidrome_scan():
+    """Ask the local Navidrome instance to rescan the library so the new
+    track / m3u change shows up immediately. Best-effort; failures are logged
+    and ignored.
+    """
+    cfg = _load_config()
+    host = cfg.get('navidrome_url', 'http://localhost:4533')
+    user = cfg.get('navidrome_user', '')
+    pw   = cfg.get('navidrome_pass', '')
+    if not user or not pw:
+        logger.info('Navidrome creds not configured, skipping scan trigger')
+        return
+    import urllib.parse, urllib.request
+    params = urllib.parse.urlencode({
+        'u': user, 'p': pw, 'v': '1.16.1', 'c': 'musicServer', 'f': 'json'
+    })
+    url = f"{host}/rest/startScan.view?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            logger.info('Navidrome scan triggered: %s', resp.read().decode()[:120])
+    except Exception as e:
+        logger.warning('Navidrome scan trigger failed: %s', e)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -312,6 +357,7 @@ def main(argv):
     logger.info('Downloaded: %s', down)
     if m3u and m3u.strip() and m3u.strip().lower() != 'default_playlist':
         write_m3u(m3u, down)
+    trigger_navidrome_scan()
     return 0
 
 

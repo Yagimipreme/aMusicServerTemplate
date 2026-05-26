@@ -9,15 +9,147 @@ function flashOk() {
   flashOk._h = setTimeout(() => t.classList.remove('show'), 1200);
 }
 
-// Liste beim Öffnen laden
+// Storage names are always extension-less ("test", not "test.m3u"). The
+// server's write_m3u tolerates either form, but normalizing in the extension
+// keeps the UI clean and stops dedup from treating "test" and "test.m3u" as
+// different entries.
+function stripExt(name) {
+  return String(name || '').replace(/\.m3u$/i, '');
+}
+
+// One-time migrate any legacy entries that still carry the .m3u suffix, then render.
 document.addEventListener('DOMContentLoaded', () => {
-  renderList();
+  chrome.storage.local.get({ m3uList: [] }, (result) => {
+    const cleaned = [...new Set(result.m3uList.map(stripExt).filter(Boolean))];
+    const changed = cleaned.length !== result.m3uList.length
+                 || cleaned.some((n, i) => n !== result.m3uList[i]);
+    if (changed) {
+      chrome.storage.local.set({ m3uList: cleaned }, renderList);
+    } else {
+      renderList();
+    }
+  });
+});
+
+// ── Pull playlists from Navidrome via server proxy ─────────────────────────
+//
+// Server exposes GET /playlists which returns {"status":"ok","playlists":[{name,songCount}...]}.
+// We merge names into the local m3uList, skipping exact dupes and flagging
+// case-only mismatches (the bug that bit us earlier with Test vs test).
+
+function showSyncStatus(kind, text) {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  const palette = {
+    ok:      { bg: '#d4edda', fg: '#155724' },
+    err:     { bg: '#f8d7da', fg: '#721c24' },
+    pending: { bg: '#eef',    fg: '#345'    },
+    warn:    { bg: '#fff3cd', fg: '#856404' },
+  };
+  const p = palette[kind] || palette.pending;
+  el.style.display = 'block';
+  el.style.background = p.bg;
+  el.style.color = p.fg;
+  el.innerHTML = text;  // text is built by caller; we trust it
+}
+
+document.getElementById('syncBtn').addEventListener('click', () => {
+  chrome.storage.sync.get(['lanUrl'], (res) => {
+    const target = res.lanUrl || 'http://localhost:5000';
+    showSyncStatus('pending', 'Asking server for Navidrome playlists…');
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+
+    fetch(target.replace(/\/$/, '') + '/playlists', {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-store',
+    })
+      .then(async (resp) => {
+        clearTimeout(timer);
+
+        if (resp.status === 404) {
+          showSyncStatus('err',
+            'Server returned 404 for <code>/playlists</code> — restart <code>start.sh</code> ' +
+            'after pulling the latest server code.');
+          return;
+        }
+        let body;
+        try { body = await resp.json(); } catch (e) {
+          showSyncStatus('err', 'Server response was not JSON.');
+          return;
+        }
+        if (!resp.ok || body.status !== 'ok') {
+          showSyncStatus('err', 'Server: ' + (body.error || resp.statusText));
+          return;
+        }
+
+        const remote = (body.playlists || []).map(p => stripExt(p.name)).filter(Boolean);
+        if (remote.length === 0) {
+          showSyncStatus('warn', 'Navidrome reports no playlists.');
+          return;
+        }
+
+        chrome.storage.local.get({ m3uList: [] }, (stored) => {
+          const localList = stored.m3uList.slice();
+          const localLowerToOriginal = new Map(
+            localList.map(n => [n.toLowerCase(), n])
+          );
+
+          const added = [];
+          const present = [];
+          const caseDiffers = [];
+
+          for (const name of remote) {
+            const lower = name.toLowerCase();
+            if (localLowerToOriginal.has(lower)) {
+              const localName = localLowerToOriginal.get(lower);
+              if (localName === name) {
+                present.push(name);
+              } else {
+                caseDiffers.push({ remote: name, local: localName });
+              }
+            } else {
+              added.push(name);
+              localList.push(name);
+              localLowerToOriginal.set(lower, name);
+            }
+          }
+
+          chrome.storage.local.set({ m3uList: localList }, () => {
+            renderList();
+            const parts = [
+              `<strong>Added ${added.length}</strong>`,
+              `${present.length} already in list`,
+            ];
+            if (caseDiffers.length) {
+              const diffs = caseDiffers
+                .map(d => `${d.local} ↔ ${d.remote}`)
+                .join(', ');
+              parts.push(`<strong>${caseDiffers.length} case-differs</strong>: ${diffs}`);
+            }
+            showSyncStatus(
+              caseDiffers.length ? 'warn' : 'ok',
+              parts.join(' · ')
+            );
+          });
+        });
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        const msg = err && err.name === 'AbortError'
+          ? 'No response within 8 seconds.'
+          : (err && err.message) || String(err);
+        showSyncStatus('err', 'Connection failed: ' + msg);
+      });
+  });
 });
 
 // Datei zur Liste hinzufügen
 document.getElementById('addBtn').addEventListener('click', () => {
   const input = document.getElementById('m3uInput');
-  const val = input.value.trim();
+  const val = stripExt(input.value.trim());
   if (!val) return;
 
   chrome.storage.local.get({m3uList: []}, (result) => {
@@ -42,7 +174,7 @@ function renderList() {
       // Radio-Button zur Auswahl (Toggle-Logik)
       div.innerHTML = `
         <label>
-          <input type="radio" name="m3u" value="${name}"> ${name}.m3u
+          <input type="radio" name="m3u" value="${name}"> ${name}
         </label>
         <button class="delete-btn" data-name="${name}">X</button>
       `;
@@ -75,7 +207,7 @@ document.getElementById('sendBtn').addEventListener('click', () => {
     chrome.storage.sync.get(['lanUrl'], (res) => {
       const target = res.lanUrl || "http://localhost:5000";
       const payload = { url: currentUrl };
-      if (selected && selected.value) payload.m3u = selected.value + ".m3u";
+      if (selected && selected.value) payload.m3u = selected.value;
 
       console.log('Diagnostic: attempting GET to', target);
       // Diagnostic GET to verify reachability and CORS
@@ -161,7 +293,7 @@ if (addUrlBtn) {
     }
 
     const selected = document.querySelector('input[name="m3u"]:checked');
-    const m3uName = selected ? selected.value + '.m3u' : 'default_playlist';
+    const m3uName = selected ? selected.value : 'default_playlist';
 
     chrome.storage.sync.get(['lanUrl'], (res) => {
       const target = res.lanUrl || "http://localhost:5000";

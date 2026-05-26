@@ -130,7 +130,8 @@
       transform: translateY(1px);
     }
 
-    /* Success checkmark overlay */
+    /* Success checkmark overlay — drawn with CSS borders so it doesn't
+       depend on a Unicode glyph being present in the system font stack. */
     #okToast {
       position: fixed;
       top: 50%;
@@ -141,17 +142,24 @@
       border-radius: 50%;
       background: #ffffff;
       border: 3px solid #4caf50;
-      color: #2e7d32;
-      font-size: 44px;
-      line-height: 66px;
-      text-align: center;
-      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       box-shadow: 0 6px 18px rgba(0,0,0,0.18);
       opacity: 0;
       transform: scale(0.5);
       pointer-events: none;
       transition: opacity 0.18s ease, transform 0.22s cubic-bezier(.2,1.6,.4,1);
       z-index: 9999;
+    }
+    #okToast::after {
+      content: '';
+      display: block;
+      width: 28px;
+      height: 14px;
+      border-left: 5px solid #2e7d32;
+      border-bottom: 5px solid #2e7d32;
+      transform: rotate(-45deg) translate(2px, -4px);
     }
     #okToast.show {
       opacity: 1;
@@ -169,12 +177,18 @@
     <input type="text" id="m3uInput" placeholder="Name of Playlist">
     <button id="addBtn">Add</button>
   </div>
-  
+  <button id="syncBtn" type="button" style="width: 100%; padding: 8px; margin-bottom: 10px;
+            background: var(--lavender-light); color: var(--lavender-deep);
+            border: 1px solid var(--lavender-deep); border-radius: 4px; cursor: pointer;
+            font-size: 0.85rem;">Pull playlists from Navidrome</button>
+  <div id="syncStatus" style="display: none; font-size: 0.8rem; padding: 6px 8px;
+            margin-bottom: 10px; border-radius: 4px; line-height: 1.4;"></div>
+
   <div id="listContainer"></div>
   <hr>
   <button id="sendBtn" style="width: 100%; padding: 10px;">Send current URL</button>
 
-  <div id="okToast" aria-hidden="true">✓</div>
+  <div id="okToast" aria-hidden="true"></div>
 
   <script src="popup.js"></script>
 </body>
