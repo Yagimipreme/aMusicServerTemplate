@@ -250,10 +250,16 @@ build.bat
 ```
 …which expects `py`, `pyinstaller`, `pystray`, `pillow` (and the project's `requirements.txt`) installed via `pip`, plus Inno Setup 6 in its default install location. Outputs `Output\Setup_aMusicServer_vX.Y.Z.exe`.
 
-Cutting a release:
+Cutting a release (automated, no Windows machine required):
+
 1. Bump `windows/version.py`
-2. Commit + tag (`v1.0.1`)
-3. Push to both remotes
-4. `cd windows && build.bat`
-5. Upload the resulting `Setup_aMusicServer_vX.Y.Z.exe` to a fresh release on both Codeberg and GitHub
-6. Installed users see the update prompt on next launch
+2. Commit, tag (`v1.0.1`), push to both remotes
+3. The GitHub Actions workflow in `.github/workflows/build-windows.yml` fires on the tag push: spins up a Windows runner, runs `build.bat`, attaches the resulting `Setup_aMusicServer_vX.Y.Z.exe` to both the GitHub release (created automatically) and the Codeberg release (created if it doesn't exist).
+4. Installed users see the update prompt on next launch.
+
+One-time setup for the Codeberg upload half:
+
+1. Generate a Codeberg API token at <https://codeberg.org/user/settings/applications> — give it `repository: write` scope.
+2. On GitHub, open the repo → Settings → Secrets and variables → Actions → New repository secret. Name it `CODEBERG_TOKEN`, paste the value.
+
+If you forget to set `CODEBERG_TOKEN`, the workflow still builds and uploads to GitHub — the Codeberg step prints a warning and exits cleanly, so the build doesn't fail outright. You can upload to Codeberg by hand by downloading the built `.exe` from the GitHub release and uploading it on `codeberg.org/Lycka/musicServerTemplate/releases`.

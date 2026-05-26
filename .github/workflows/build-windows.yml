@@ -1,0 +1,111 @@
+name: Build Windows installer
+
+# Triggers:
+#   - push of a v*.*.* tag           → builds + publishes to both forges
+#   - manual run from the Actions UI → so we can build v1.0.1 (whose tag was
+#     pushed before this workflow existed) by dispatching against that tag
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write    # required by softprops/action-gh-release to attach assets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pystray pillow
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: cmd
+        working-directory: windows
+        run: build.bat
+
+      - name: Locate built installer
+        id: artifact
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem windows\Output\Setup_aMusicServer_*.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "no installer produced in windows\Output\"; exit 1 }
+          "path=$($exe.FullName)"      | Out-File -Append $env:GITHUB_OUTPUT
+          "name=$($exe.Name)"          | Out-File -Append $env:GITHUB_OUTPUT
+          "tag=$($env:GITHUB_REF_NAME)"| Out-File -Append $env:GITHUB_OUTPUT
+          Write-Host "Built: $($exe.Name) ($([math]::Round($exe.Length/1MB,1)) MB)"
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.artifact.outputs.tag }}
+          files: ${{ steps.artifact.outputs.path }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload to Codeberg release
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+          TAG:       ${{ steps.artifact.outputs.tag }}
+          ASSETNAME: ${{ steps.artifact.outputs.name }}
+          FILEPATH:  ${{ steps.artifact.outputs.path }}
+          CB_REPO:   "Lycka/musicServerTemplate"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CODEBERG_TOKEN:-}" ]; then
+            echo "::warning::CODEBERG_TOKEN secret is not set — skipping Codeberg upload."
+            echo "::warning::Create one at https://codeberg.org/user/settings/applications"
+            echo "::warning::and add it as a repo secret named CODEBERG_TOKEN."
+            exit 0
+          fi
+          API="https://codeberg.org/api/v1"
+          AUTH="Authorization: token $CODEBERG_TOKEN"
+
+          echo "Looking up Codeberg release for tag $TAG…"
+          rel_json=$(curl -sS -H "$AUTH" "$API/repos/$CB_REPO/releases/tags/$TAG")
+          release_id=$(echo "$rel_json" | jq -r '.id // empty')
+
+          if [ -z "$release_id" ]; then
+            echo "Release for tag $TAG not found, creating it…"
+            release_id=$(curl -sS -X POST -H "$AUTH" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":\"Automated release of $TAG\"}" \
+              "$API/repos/$CB_REPO/releases" | jq -r '.id')
+            if [ -z "$release_id" ] || [ "$release_id" = "null" ]; then
+              echo "::error::failed to create Codeberg release"
+              exit 1
+            fi
+            echo "Created release id=$release_id"
+          else
+            echo "Found existing release id=$release_id"
+          fi
+
+          # Idempotency: delete an existing asset with the same name first
+          asset_id=$(echo "$rel_json" | jq -r ".assets[]? | select(.name==\"$ASSETNAME\") | .id" | head -1)
+          if [ -n "$asset_id" ]; then
+            echo "Replacing existing asset id=$asset_id"
+            curl -sS -X DELETE -H "$AUTH" "$API/repos/$CB_REPO/releases/$release_id/assets/$asset_id" > /dev/null
+          fi
+
+          echo "Uploading $ASSETNAME → Codeberg release $TAG…"
+          curl -sS -X POST -H "$AUTH" \
+            -F "attachment=@$FILEPATH" \
+            "$API/repos/$CB_REPO/releases/$release_id/assets?name=$ASSETNAME"
+          echo
+          echo "Done."
