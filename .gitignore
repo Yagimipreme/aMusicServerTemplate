@@ -6,3 +6,17 @@ __pycache__/
 *.jpg
 *Zone.Identifier*
 ffmpeg.exe
+
+# Local config (contains paths + credentials). Distribute config.example.json.
+config.json
+
+# User playlist exports
+playlists/*.csv
+
+# Windows build artifacts
+windows/Output/
+windows/build/
+build/
+dist/
+*.pyc
+.cache/

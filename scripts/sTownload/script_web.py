@@ -51,41 +51,104 @@ def get_ffmpeg_location_from_config() -> str | None:
     return loc if loc else None
 
 
+def trigger_navidrome_scan():
+    cfg = _load_config()
+    host = cfg.get('navidrome_url', 'http://localhost:4533')
+    user = cfg.get('navidrome_user', '')
+    pw   = cfg.get('navidrome_pass', '')
+    if not user or not pw:
+        logger.info('Navidrome creds not configured, skipping scan trigger')
+        return
+    params = urllib.parse.urlencode({
+        'u': user, 'p': pw, 'v': '1.16.1', 'c': 'musicServer', 'f': 'json'
+    })
+    url = f"{host}/rest/startScan.view?{params}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            logger.info('Navidrome scan triggered: %s', resp.read().decode()[:120])
+    except Exception as e:
+        logger.warning('Navidrome scan trigger failed: %s', e)
+
+
 # ── Download ───────────────────────────────────────────────────────────────────
 
+import os
+import shutil
+import urllib.request
+import urllib.parse
+from yt_dlp import YoutubeDL
+
+
 def download_single(url: str, out_dir: str) -> str | None:
+    """
+    Downloads a single URL as MP3 with embedded thumbnail.
+    Works on headless Debian servers.
+    Returns path to final mp3 file or None if failed.
+    """
+
     os.makedirs(out_dir, exist_ok=True)
 
-    ffmpeg_location = get_ffmpeg_location_from_config() or shutil.which('ffmpeg')
-    if ffmpeg_location and os.path.isfile(ffmpeg_location):
-        ffmpeg_location = os.path.dirname(ffmpeg_location)
+    # Resolve ffmpeg location
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg_location = os.path.dirname(ffmpeg_path) if ffmpeg_path else None
 
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'outtmpl': os.path.join(out_dir, '%(title)s.%(ext)s'),
-        'writethumbnail': True,
-        'quiet': True,
-        'no_warnings': True,
-        'postprocessors': [
-            {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'},
+        # Audio selection
+        "format": "bestaudio/best",
+        "noplaylist": True,
+
+        # Output
+        "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
+
+        # Clean console
+        "quiet": True,
+        "no_warnings": True,
+
+        # Stability
+        "retries": 10,
+        "concurrent_fragment_downloads": 5,
+
+        # Extractor tweaks (helps avoid YouTube issues)
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"]
+            }
+        },
+
+        # Post-processing: Convert to MP3 + embed thumbnail
+        "writethumbnail": True,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            },
+            {
+                "key": "EmbedThumbnail",
+            },
+            {
+                "key": "FFmpegMetadata",
+            },
         ],
-        **({'ffmpeg_location': ffmpeg_location} if ffmpeg_location else {}),
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get('title') or str(int(time.time()))
-            candidate = os.path.join(out_dir, title + '.mp3')
-            if os.path.exists(candidate):
-                return candidate
-            mp3s = [os.path.join(out_dir, p) for p in os.listdir(out_dir) if p.lower().endswith('.mp3')]
-            return max(mp3s, key=os.path.getctime) if mp3s else None
-    except Exception:
-        logger.exception('Download failed')
-        return None
+    if ffmpeg_location:
+        ydl_opts["ffmpeg_location"] = ffmpeg_location
 
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+
+            # After conversion, extension is always mp3
+            filename = ydl.prepare_filename(info)
+            base, _ = os.path.splitext(filename)
+            final_path = base + ".mp3"
+
+            return final_path if os.path.exists(final_path) else None
+
+    except Exception as e:
+        print(f"[ERROR] Download failed: {e}")
+        return None
 
 # ── M3U ────────────────────────────────────────────────────────────────────────
 
@@ -121,7 +184,7 @@ def main(argv):
 
     logger.info('Downloaded: %s', downloaded)
 
-    if m3u:
+    if m3u and m3u.strip() and m3u.strip().lower() != 'default_playlist':
         write_m3u(m3u, downloaded)
 
     if eyed3:
@@ -134,6 +197,8 @@ def main(argv):
                 audio.tag.save()
         except Exception:
             logger.exception('Tagging failed')
+
+    trigger_navidrome_scan()
 
     return 0
 

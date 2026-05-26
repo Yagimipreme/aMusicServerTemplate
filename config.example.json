@@ -1,0 +1,13 @@
+{
+  "song_dir": "",
+  "playlists_dir": "",
+  "sc_username": "",
+  "sp_username": "",
+  "sc_topsong": "",
+  "path": "",
+  "is_timed": false,
+  "ffmpeg_location": "",
+  "navidrome_url": "",
+  "navidrome_user": "",
+  "navidrome_pass": ""
+}

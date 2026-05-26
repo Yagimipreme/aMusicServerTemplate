@@ -122,6 +122,18 @@ def get_playback_m3u8_url(transcoding_url: str, client_id: str, track_auth: str 
     return r.json()["url"]
 
 
+def get_playback_m3u8_url_safe(transcoding_url: str, client_id: str, track_auth: str | None) -> str | None:
+    """Like get_playback_m3u8_url but returns None on 4xx instead of raising."""
+    params = {"client_id": client_id}
+    if track_auth:
+        params["track_authorization"] = track_auth
+    r = requests.get(transcoding_url, params=params, headers={"User-Agent": USER_AGENT}, timeout=20)
+    if r.status_code in (401, 403, 404):
+        return None
+    r.raise_for_status()
+    return r.json()["url"]
+
+
 # ── ffmpeg conversion ──────────────────────────────────────────────────────────
 
 def run_ffmpeg_to_mp3(m3u8_url: str, out_path: str, art_out_path: str | None = None):
@@ -191,8 +203,26 @@ def process_track(href: str, client_id: str, out_dir: str = ".", title_override:
     tmp.close()
 
     try:
-        transcoding = pick_hls_transcoding(track, art_out_path=cover)
-        m3u8 = get_playback_m3u8_url(transcoding["url"], client_id, track.get("track_authorization"))
+        trans_list = (track.get("media") or {}).get("transcodings", [])
+        # Sort: free/mp3 HLS first (opus/mp3_standard), aac_160 last (Go+ only)
+        hls_trans = [t for t in trans_list if t.get("format", {}).get("protocol") == "hls"]
+        hls_trans.sort(key=lambda t: (1 if "aac_160" in t.get("preset", "") else 0))
+
+        # Also fetch cover art using the first transcoding (artwork is on track JSON anyway)
+        pick_hls_transcoding(track, art_out_path=cover)  # just for cover side-effect
+
+        m3u8 = None
+        for t in hls_trans:
+            print(f"[TRY] transcoding preset={t.get('preset')} url={t['url'][:60]}...")
+            m3u8 = get_playback_m3u8_url_safe(t["url"], client_id, track.get("track_authorization"))
+            if m3u8:
+                print(f"[OK] Using preset: {t.get('preset')}")
+                break
+            print(f"[SKIP] 4xx on preset={t.get('preset')}, trying next...")
+
+        if not m3u8:
+            raise RuntimeError("All HLS transcodings returned 4xx — track may be geo-blocked or Go+ only.")
+
         run_ffmpeg_to_mp3(m3u8, mp3, art_out_path=cover)
     finally:
         if cover and os.path.exists(cover):

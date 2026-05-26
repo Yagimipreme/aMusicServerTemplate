@@ -196,22 +196,27 @@ def download_single_soundcloud(url: str, out_dir: str) -> str | None:
     except HTTPError as he:
         code = getattr(getattr(he, 'response', None), 'status_code', None)
         logger.warning('Sc2.process_track raised HTTPError: %s', code)
-        if code == 401:
-            logger.info('Fetching fresh client_id via Selenium')
+        if code in (401, 403, 404):
+            logger.info('HTTP %s — fetching fresh client_id via Selenium', code)
             new_cid = fetch_client_id_via_selenium(target_url=url)
             if new_cid:
                 persist_client_id(new_cid)
                 sc2.client_id = new_cid
                 logger.info('Retrying process_track with new client_id')
-                result = sc2.process_track(url, new_cid, out_dir)
+                try:
+                    result = sc2.process_track(url, new_cid, out_dir)
+                except Exception:
+                    logger.exception('Sc2 retry with refreshed client_id failed; using yt-dlp fallback')
+                    return _yt_dlp_fallback(url, out_dir)
             else:
-                logger.error('Could not obtain new client_id via Selenium')
-                raise
+                logger.warning('Could not obtain new client_id via Selenium; using yt-dlp fallback')
+                return _yt_dlp_fallback(url, out_dir)
         else:
-            raise
+            logger.warning('Sc2 raised non-auth HTTPError %s; using yt-dlp fallback', code)
+            return _yt_dlp_fallback(url, out_dir)
     except Exception:
-        logger.exception('Sc2 pipeline failed')
-        return None
+        logger.exception('Sc2 pipeline failed; using yt-dlp fallback')
+        return _yt_dlp_fallback(url, out_dir)
 
     mp3 = result.get('mp3')
     if mp3 and os.path.exists(mp3):
@@ -233,7 +238,12 @@ def _yt_dlp_fallback(url: str, out_dir: str) -> str | None:
         'writethumbnail': True,
         'quiet': True,
         'no_warnings': True,
-        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}],
+        'postprocessors': [
+            {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'},
+            {'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg'},
+            {'key': 'EmbedThumbnail'},
+            {'key': 'FFmpegMetadata'},
+        ],
         **({'ffmpeg_location': ffmpeg_location} if ffmpeg_location else {}),
     }
     try:
@@ -241,10 +251,23 @@ def _yt_dlp_fallback(url: str, out_dir: str) -> str | None:
             info = ydl.extract_info(url, download=True)
             title = info.get('title') or str(int(time.time()))
             candidate = os.path.join(out_dir, title + '.mp3')
-            if os.path.exists(candidate):
-                return candidate
-            mp3s = [os.path.join(out_dir, p) for p in os.listdir(out_dir) if p.lower().endswith('.mp3')]
-            return max(mp3s, key=os.path.getctime) if mp3s else None
+            if not os.path.exists(candidate):
+                mp3s = [os.path.join(out_dir, p) for p in os.listdir(out_dir) if p.lower().endswith('.mp3')]
+                candidate = max(mp3s, key=os.path.getctime) if mp3s else None
+
+            # Belt-and-suspenders: EmbedThumbnail normally deletes the cover
+            # after embedding, but if anything went sideways scrub any leftover
+            # thumbnail next to the mp3.
+            if candidate:
+                base, _ = os.path.splitext(candidate)
+                for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+                    leftover = base + ext
+                    if os.path.exists(leftover):
+                        try:
+                            os.remove(leftover)
+                        except OSError:
+                            pass
+            return candidate
     except Exception:
         logger.exception('yt-dlp fallback download failed')
         return None
@@ -287,7 +310,7 @@ def main(argv):
         return 1
 
     logger.info('Downloaded: %s', down)
-    if m3u:
+    if m3u and m3u.strip() and m3u.strip().lower() != 'default_playlist':
         write_m3u(m3u, down)
     return 0
 

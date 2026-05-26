@@ -1,5 +1,14 @@
 let selectedM3U = "";
 
+// Brief success badge — shown when the server returns HTTP 200
+function flashOk() {
+  const t = document.getElementById('okToast');
+  if (!t) return;
+  t.classList.add('show');
+  clearTimeout(flashOk._h);
+  flashOk._h = setTimeout(() => t.classList.remove('show'), 1200);
+}
+
 // Liste beim Öffnen laden
 document.addEventListener('DOMContentLoaded', () => {
   renderList();
@@ -83,7 +92,7 @@ document.getElementById('sendBtn').addEventListener('click', () => {
         })
         .then(resp => {
           if (!resp.ok) throw new Error('Server antwortete mit ' + resp.status);
-          
+          flashOk();
         })
         .catch(err => {
           console.error('Send failed', err && err.name, err && err.message, err);
@@ -106,6 +115,9 @@ document.getElementById('sendBtn').addEventListener('click', () => {
                 .then(gresp => {
                   console.log('Alt diagnostic GET', gresp.status, gresp.statusText);
                   return fetch(altTarget, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                })
+                .then(resp => {
+                  if (resp && resp.ok) flashOk();
                 })
                 .catch(altErr => {
                   console.error('Alt-host attempt failed', altErr);
@@ -164,7 +176,7 @@ if (addUrlBtn) {
       })
       .then(resp => {
         if (!resp.ok) throw new Error('Server antwortete mit ' + resp.status);
-        alert('Erfolgreich gesendet!');
+        flashOk();
       })
       .catch(err => {
         console.error('Manual send failed', err);

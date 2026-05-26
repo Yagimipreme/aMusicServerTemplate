@@ -3,7 +3,6 @@
 
 # sTownload – Spotify Playlist Downloader
 
-import requests
 import yt_dlp
 from yt_dlp.utils import PostProcessingError, DownloadError
 import logging
@@ -12,19 +11,18 @@ import os
 import re
 import csv
 import json
+import glob
 from pathlib import Path
 
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
-PLAYLIST_DIR = os.path.join(BASE_DIR, "Playlists")
-
-TESTING  = False
-CSV_MODE = False
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../"))
 
 # Updated from config in __main__
-DOWNLOAD_DIR = os.path.join(BASE_DIR, "Songs")
+DOWNLOAD_DIR  = os.path.join(BASE_DIR, "Songs")
+PLAYLISTS_DIR = os.path.join(PROJECT_ROOT, "playlists")
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -55,46 +53,8 @@ def load_config() -> dict:
     print("[WARN] No config found – using defaults")
     return {
         "song_dir": get_default_music_dir(),
-        "sp_playlist_ids": [],
+        "playlists_dir": "",
     }
-
-
-# ── Spotify helpers ────────────────────────────────────────────────────────────
-
-def extract_playlist_id(playlist_url: str) -> str:
-    match = re.search(r'playlist/([a-zA-Z0-9]+)', playlist_url)
-    if not match:
-        raise ValueError(f"Invalid Spotify playlist URL: {playlist_url}")
-    return match.group(1)
-
-
-def get_playlist_content(playlist_url: str) -> list[dict]:
-    playlist_id = extract_playlist_id(playlist_url)
-    print(f"PLAYLIST-ID: {playlist_id}")
-
-    response = requests.get(
-        "https://spotisaver.net/api/get_playlist.php",
-        params={"id": playlist_id, "type": "playlist", "lang": "en"},
-        headers={
-            "accept": "*/*",
-            "referer": f"https://spotisaver.net/en/playlist/{playlist_id}/",
-            "user-agent": "Mozilla/5.0",
-        },
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data.get("tracks") or data.get("data") or []
-
-
-def normalize_api_tracks(api_tracks: list) -> list[dict]:
-    normalized = []
-    for t in api_tracks:
-        title = t.get("title") or t.get("name")
-        raw_artists = t.get("artists", [])
-        artists = [a.get("name") if isinstance(a, dict) else str(a) for a in raw_artists]
-        album = t["album"].get("name", "") if isinstance(t.get("album"), dict) else t.get("album", "")
-        normalized.append({"title": title, "album": album, "artists": artists})
-    return normalized
 
 
 # ── Download ───────────────────────────────────────────────────────────────────
@@ -191,26 +151,63 @@ def write_m3u(playlist_name: str, track_paths: list[str]):
     print(f"Playlist written: {m3u_path}")
 
 
-# ── CSV helpers (TESTING mode only) ───────────────────────────────────────────
+# ── Playlist CSV parsing ──────────────────────────────────────────────────────
+#
+# Bulk Spotify is driven by per-playlist CSV files. Export each playlist once
+# via https://exportify.app (or any tool that produces the same column set),
+# drop the .csv files into the playlists/ directory. We accept the Exportify
+# schema (`Track Name`, `Artist Name(s)`, `Album Name`) and, as a fallback,
+# a simple `title,artists,album` column set.
+
+EXPORTIFY_COLS = ("Track Name", "Artist Name(s)", "Album Name")
+SIMPLE_COLS    = ("title", "artists", "album")
+
 
 def get_csv_playlist(csv_path: str) -> list[dict]:
+    """Read one CSV file and return a list of {title, album, artists[]} dicts."""
     tracks = []
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
-        for row in csv.DictReader(f, delimiter=','):
-            title = row.get("Track Name")
+        reader = csv.DictReader(f, delimiter=',')
+        if not reader.fieldnames:
+            return tracks
+
+        # Pick the schema based on which title column is present
+        if "Track Name" in reader.fieldnames:
+            title_col, artists_col, album_col = EXPORTIFY_COLS
+        elif "title" in reader.fieldnames:
+            title_col, artists_col, album_col = SIMPLE_COLS
+        else:
+            print(f"  [WARN] {os.path.basename(csv_path)} has no recognized title "
+                  f"column ({EXPORTIFY_COLS[0]!r} or {SIMPLE_COLS[0]!r}); skipping")
+            return tracks
+
+        for row in reader:
+            title = (row.get(title_col) or "").strip()
             if not title:
                 continue
-            artists_str = row.get("Artist Name(s)", "")
+            artists_str = (row.get(artists_col) or "").strip()
             artists = (
                 [a.strip() for a in re.split(r',|&| feat\.? ', artists_str, flags=re.IGNORECASE) if a.strip()]
                 if artists_str else []
             )
-            tracks.append({"title": title, "album": row.get("Album Name", ""), "artists": artists})
+            tracks.append({
+                "title":   title,
+                "album":   (row.get(album_col) or "").strip(),
+                "artists": artists,
+            })
     return tracks
 
 
 def get_csv_name(csv_path: str) -> str:
     return os.path.splitext(os.path.basename(csv_path))[0]
+
+
+def discover_playlists(playlists_dir: str) -> list[str]:
+    """Return all .csv files under playlists_dir, sorted, ignoring dotfiles."""
+    if not playlists_dir or not os.path.isdir(playlists_dir):
+        return []
+    found = sorted(glob.glob(os.path.join(playlists_dir, "*.csv")))
+    return [p for p in found if not os.path.basename(p).startswith(".")]
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -221,31 +218,26 @@ if __name__ == '__main__':
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     print(f"[INFO] Song dir: {DOWNLOAD_DIR}")
 
-    if TESTING:
-        print("[TEST MODE] CSV only")
-        csv_path = config.get("csv_path")
-        if not csv_path:
-            raise ValueError("csv_path missing in config.json")
-        process_tracks(get_csv_playlist(csv_path), get_csv_name(csv_path))
+    PLAYLISTS_DIR = config.get("playlists_dir") or PLAYLISTS_DIR
+    print(f"[INFO] Playlists dir: {PLAYLISTS_DIR}")
+
+    csv_files = discover_playlists(PLAYLISTS_DIR)
+    if not csv_files:
+        print(f"[WARN] No CSV playlists found in {PLAYLISTS_DIR} — nothing to do.")
+        print( "       Export your Spotify playlists at https://exportify.app")
+        print( "       and drop the .csv files into that folder.")
         exit()
 
-    playlist_ids = config.get("sp_playlist_ids", [])
-    if isinstance(playlist_ids, str):
-        playlist_ids = [playlist_ids]
+    print(f"[INFO] Found {len(csv_files)} playlist CSV(s)")
 
-    if not playlist_ids:
-        print("[WARN] No sp_playlist_ids in config.json – nothing to do.")
-        exit()
-
-    for pid in playlist_ids:
-        playlist_url = f"https://open.spotify.com/playlist/{pid}"
-        print(f"\n[INFO] Loading playlist: {playlist_url}")
+    for csv_path in csv_files:
+        name = get_csv_name(csv_path)
+        print(f"\n[INFO] Loading playlist: {name}  ({csv_path})")
         try:
-            raw_tracks = get_playlist_content(playlist_url)
-            tracks = normalize_api_tracks(raw_tracks)
+            tracks = get_csv_playlist(csv_path)
             if not tracks:
-                print(f"[WARN] No tracks found for {pid}")
+                print(f"[WARN] No tracks parsed from {name}")
                 continue
-            process_tracks(tracks, f"spotify_{pid}")
+            process_tracks(tracks, name)
         except Exception as e:
-            print(f"[ERROR] Failed for playlist {pid}: {e}")
+            print(f"[ERROR] Failed for playlist {name}: {e}")

@@ -129,6 +129,34 @@
     #sendBtn:active, #addUrlBtn:active {
       transform: translateY(1px);
     }
+
+    /* Success checkmark overlay */
+    #okToast {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 72px;
+      height: 72px;
+      margin: -36px 0 0 -36px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 3px solid #4caf50;
+      color: #2e7d32;
+      font-size: 44px;
+      line-height: 66px;
+      text-align: center;
+      font-weight: bold;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+      opacity: 0;
+      transform: scale(0.5);
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.22s cubic-bezier(.2,1.6,.4,1);
+      z-index: 9999;
+    }
+    #okToast.show {
+      opacity: 1;
+      transform: scale(1);
+    }
   </style>
 </head>
 <body>
@@ -145,6 +173,8 @@
   <div id="listContainer"></div>
   <hr>
   <button id="sendBtn" style="width: 100%; padding: 10px;">Send current URL</button>
+
+  <div id="okToast" aria-hidden="true">✓</div>
 
   <script src="popup.js"></script>
 </body>
