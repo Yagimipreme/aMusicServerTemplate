@@ -60,7 +60,7 @@ jobs:
 
       - name: Upload to Codeberg release
         env:
-          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_CI }}
           TAG:       ${{ steps.artifact.outputs.tag }}
           ASSETNAME: ${{ steps.artifact.outputs.name }}
           FILEPATH:  ${{ steps.artifact.outputs.path }}
@@ -69,9 +69,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CODEBERG_TOKEN:-}" ]; then
-            echo "::warning::CODEBERG_TOKEN secret is not set — skipping Codeberg upload."
+            echo "::warning::CODEBERG_CI secret is not set — skipping Codeberg upload."
             echo "::warning::Create one at https://codeberg.org/user/settings/applications"
-            echo "::warning::and add it as a repo secret named CODEBERG_TOKEN."
+            echo "::warning::and add it as a repo secret named CODEBERG_CI."
             exit 0
           fi
           API="https://codeberg.org/api/v1"

@@ -260,6 +260,6 @@ Cutting a release (automated, no Windows machine required):
 One-time setup for the Codeberg upload half:
 
 1. Generate a Codeberg API token at <https://codeberg.org/user/settings/applications> — give it `repository: write` scope.
-2. On GitHub, open the repo → Settings → Secrets and variables → Actions → New repository secret. Name it `CODEBERG_TOKEN`, paste the value.
+2. On GitHub, open the repo → Settings → Secrets and variables → Actions → New repository secret. Name it `CODEBERG_CI`, paste the value.
 
-If you forget to set `CODEBERG_TOKEN`, the workflow still builds and uploads to GitHub — the Codeberg step prints a warning and exits cleanly, so the build doesn't fail outright. You can upload to Codeberg by hand by downloading the built `.exe` from the GitHub release and uploading it on `codeberg.org/Lycka/musicServerTemplate/releases`.
+If you forget to set `CODEBERG_CI`, the workflow still builds and uploads to GitHub — the Codeberg step prints a warning and exits cleanly, so the build doesn't fail outright. You can upload to Codeberg by hand by downloading the built `.exe` from the GitHub release and uploading it on `codeberg.org/Lycka/musicServerTemplate/releases`.
