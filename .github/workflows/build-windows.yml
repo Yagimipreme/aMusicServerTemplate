@@ -76,36 +76,92 @@ jobs:
           fi
           API="https://codeberg.org/api/v1"
           AUTH="Authorization: token $CODEBERG_TOKEN"
+          BODY=/tmp/cb-resp.json
 
-          echo "Looking up Codeberg release for tag $TAG…"
-          rel_json=$(curl -sS -H "$AUTH" "$API/repos/$CB_REPO/releases/tags/$TAG")
-          release_id=$(echo "$rel_json" | jq -r '.id // empty')
+          # Sanity check: token is valid and we can read our own user info.
+          echo "→ verifying token can read /user…"
+          status=$(curl -sS -o "$BODY" -w '%{http_code}' -H "$AUTH" "$API/user")
+          echo "   HTTP $status"
+          if [ "$status" != "200" ]; then
+            echo "::error::Codeberg auth failed (HTTP $status). Response body:"
+            cat "$BODY"; echo
+            echo "::error::Check the CODEBERG_CI token: it must be a valid Codeberg API token."
+            exit 1
+          fi
+          user=$(jq -r '.login // "?"' < "$BODY")
+          echo "   authenticated as $user"
 
+          # Sanity check: tag must exist on the Codeberg repo.
+          echo "→ verifying tag $TAG exists on $CB_REPO…"
+          status=$(curl -sS -o "$BODY" -w '%{http_code}' -H "$AUTH" "$API/repos/$CB_REPO/tags/$TAG")
+          echo "   HTTP $status"
+          if [ "$status" != "200" ]; then
+            echo "::error::Codeberg tag lookup failed (HTTP $status). Response body:"
+            cat "$BODY"; echo
+            echo "::error::The tag $TAG must be pushed to $CB_REPO before the workflow runs."
+            exit 1
+          fi
+
+          # Look up release for tag.
+          echo "→ looking up Codeberg release for $TAG…"
+          status=$(curl -sS -o "$BODY" -w '%{http_code}' -H "$AUTH" "$API/repos/$CB_REPO/releases/tags/$TAG")
+          echo "   HTTP $status"
+          release_id=""
+          if [ "$status" = "200" ]; then
+            release_id=$(jq -r '.id // empty' < "$BODY")
+            echo "   found release id=$release_id"
+          elif [ "$status" = "404" ]; then
+            echo "   no release yet — will create"
+          else
+            echo "::error::Codeberg release lookup returned HTTP $status. Body:"
+            cat "$BODY"; echo
+            exit 1
+          fi
+
+          # Create release if missing.
           if [ -z "$release_id" ]; then
-            echo "Release for tag $TAG not found, creating it…"
-            release_id=$(curl -sS -X POST -H "$AUTH" \
-              -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":\"Automated release of $TAG\"}" \
-              "$API/repos/$CB_REPO/releases" | jq -r '.id')
-            if [ -z "$release_id" ] || [ "$release_id" = "null" ]; then
-              echo "::error::failed to create Codeberg release"
+            echo "→ creating Codeberg release $TAG…"
+            payload=$(jq -nc --arg t "$TAG" '{tag_name:$t, name:$t, body:"Automated release of \($t)", draft:false, prerelease:false}')
+            status=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST -H "$AUTH" \
+              -H "Content-Type: application/json" -d "$payload" \
+              "$API/repos/$CB_REPO/releases")
+            echo "   HTTP $status"
+            if [ "$status" != "201" ] && [ "$status" != "200" ]; then
+              echo "::error::Codeberg release creation failed (HTTP $status). Body:"
+              cat "$BODY"; echo
+              echo "::error::Likely the CODEBERG_CI token lacks write:repository scope."
+              echo "::error::Regenerate the token at codeberg.org/user/settings/applications"
+              echo "::error::with the 'write:repository' scope ticked."
               exit 1
             fi
-            echo "Created release id=$release_id"
-          else
-            echo "Found existing release id=$release_id"
+            release_id=$(jq -r '.id // empty' < "$BODY")
+            if [ -z "$release_id" ] || [ "$release_id" = "null" ]; then
+              echo "::error::Codeberg release was created but no id returned. Body:"
+              cat "$BODY"; echo
+              exit 1
+            fi
+            echo "   created id=$release_id"
           fi
 
-          # Idempotency: delete an existing asset with the same name first
-          asset_id=$(echo "$rel_json" | jq -r ".assets[]? | select(.name==\"$ASSETNAME\") | .id" | head -1)
+          # Idempotency: drop any existing asset with the same filename.
+          echo "→ checking for an existing asset named $ASSETNAME…"
+          curl -sS -o "$BODY" -H "$AUTH" "$API/repos/$CB_REPO/releases/$release_id/assets" >/dev/null
+          asset_id=$(jq -r ".[]? | select(.name==\"$ASSETNAME\") | .id" < "$BODY" | head -1)
           if [ -n "$asset_id" ]; then
-            echo "Replacing existing asset id=$asset_id"
-            curl -sS -X DELETE -H "$AUTH" "$API/repos/$CB_REPO/releases/$release_id/assets/$asset_id" > /dev/null
+            echo "   replacing existing asset id=$asset_id"
+            curl -sS -X DELETE -H "$AUTH" \
+              "$API/repos/$CB_REPO/releases/$release_id/assets/$asset_id" > /dev/null
           fi
 
-          echo "Uploading $ASSETNAME → Codeberg release $TAG…"
-          curl -sS -X POST -H "$AUTH" \
+          # Upload.
+          echo "→ uploading $ASSETNAME ($(du -h "$FILEPATH" | cut -f1)) to release $TAG…"
+          status=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST -H "$AUTH" \
             -F "attachment=@$FILEPATH" \
-            "$API/repos/$CB_REPO/releases/$release_id/assets?name=$ASSETNAME"
-          echo
-          echo "Done."
+            "$API/repos/$CB_REPO/releases/$release_id/assets?name=$ASSETNAME")
+          echo "   HTTP $status"
+          if [ "$status" != "201" ] && [ "$status" != "200" ]; then
+            echo "::error::Codeberg asset upload failed (HTTP $status). Body:"
+            cat "$BODY"; echo
+            exit 1
+          fi
+          echo "✓ Codeberg release populated."
