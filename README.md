@@ -115,7 +115,10 @@ Navidrome imports — so the mix shows up in Symfonium with no effort.
 - Trigger it now: `curl -X POST http://localhost:5000/discover/run`
 - Requires Navidrome credentials in `config.json` and its Last.fm agent enabled
   (Navidrome → Settings; without it there are no similar artists to discover).
-- Tune the size in `config.json` under `"discover": { "weekly_count": 30 }`.
+- Tune it in `config.json` under `"discover": { "weekly_count": 30, "playlist_name": "Weekly Mix" }`.
+- It seeds from the artists you play most, so it needs **some listening history** in
+  Navidrome to work from — a brand-new, never-played library produces an empty mix until
+  you've played a few things.
 
 ---
 

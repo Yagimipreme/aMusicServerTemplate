@@ -83,8 +83,10 @@ def _run_discover_once():
                 cfg = json.load(f)
         except Exception:
             pass
-        count = (cfg.get("discover") or {}).get("weekly_count", 30)
-        result = run_weekly(deps, count=count)
+        disc = cfg.get("discover") or {}
+        count = disc.get("weekly_count", 30)
+        playlist_name = disc.get("playlist_name", "Weekly Mix")
+        result = run_weekly(deps, count=count, playlist_name=playlist_name)
         logger.info("[DISCOVER] run complete: %s", result)
         return {"status": "ok", **result}
     except Exception as e:
@@ -114,7 +116,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self._set_headers(204)
 
     def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
+        content_length = int(self.headers.get('Content-Length') or 0)
         post_data = self.rfile.read(content_length)
 
         if self.path.rstrip('/') == '/discover/run':
