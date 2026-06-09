@@ -34,13 +34,14 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
         paths = acquire(deps.download_fn, c)
         if not paths:
             continue
-        acquired_paths.extend(paths)
+        remaining = count - len(acquired_paths)
+        acquired_paths.extend(paths[:remaining])
         deps.state.add(track_key(c["artist"], c["title"]))
 
     m3u = None
     if acquired_paths:
-        m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
         deps.state.save()
+        m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
         try:
             deps.subsonic.start_scan()
         except Exception:

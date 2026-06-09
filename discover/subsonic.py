@@ -54,6 +54,7 @@ class Subsonic:
         return [{"id": s.get("id"), "name": s.get("name")} for s in sim if s.get("name")]
 
     def song_exists(self, artist: str, title: str) -> bool:
+        # search3.view is an approximate full-text match (may have false positives); accepted for Phase 1.
         sr = self._call("search3.view", query=f"{artist} {title}",
                         songCount=1, albumCount=0, artistCount=0)
         songs = (sr.get("searchResult3", {}) or {}).get("song", []) or []

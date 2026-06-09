@@ -68,3 +68,13 @@ def test_run_weekly_triggers_scan(tmp_path):
     deps.subsonic.start_scan = lambda: scans.append(True) or True
     run_weekly(deps, count=2, seed_limit=5, per_seed=20, per_artist=1)
     assert scans == [True]
+
+
+def test_run_weekly_does_not_scan_when_nothing_acquired(tmp_path):
+    deps, _ = build_deps(tmp_path)
+    scans = []
+    deps.subsonic.start_scan = lambda: scans.append(1) or True
+    deps.subsonic.song_exists = lambda a, t: True  # everything owned -> nothing acquired
+    result = run_weekly(deps, count=2, seed_limit=5, per_seed=20, per_artist=1)
+    assert result["acquired"] == 0
+    assert scans == []

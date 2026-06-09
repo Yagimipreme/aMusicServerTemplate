@@ -1,5 +1,8 @@
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 class DiscoverState:
@@ -28,5 +31,6 @@ def load_state(path: str) -> DiscoverState:
             with open(path, "r", encoding="utf-8") as f:
                 suggested = json.load(f).get("suggested", []) or []
         except Exception:
+            logger.warning("load_state: could not read %s, starting empty", path)
             suggested = []
     return DiscoverState(path, suggested)
