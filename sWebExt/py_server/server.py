@@ -31,6 +31,72 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 
 
+# ── Discover engine wiring ─────────────────────────────────────────────────────
+
+def _build_discover_deps():
+    """Assemble engine dependencies from config + existing downloader. Returns deps or None."""
+    from types import SimpleNamespace
+
+    sys.path.insert(0, _PROJECT_ROOT)  # make `discover` importable
+    from discover.config import load_config
+    from discover.subsonic import Subsonic
+    from discover.state import load_state
+    from discover.ytdlp_adapter import make_search_fn, make_download_fn
+
+    cfg = load_config(_CONFIG_PATH)
+    host = cfg.get("navidrome_url", "")
+    user = cfg.get("navidrome_user", "")
+    pw = cfg.get("navidrome_pass", "")
+    if not host or not user or not pw:
+        logger.warning("[DISCOVER] navidrome creds missing — engine disabled")
+        return None
+
+    # Reuse the existing YouTube downloader's download() + song_dir.
+    dl_path = os.path.join(_PROJECT_ROOT, "scripts/sTownload/script_web.py")
+    spec = importlib.util.spec_from_file_location("sTownload_web", dl_path)
+    dl_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl_mod)
+    song_dir = dl_mod.get_config_song_dir()
+
+    state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
+    return SimpleNamespace(
+        subsonic=Subsonic(host, user, pw),
+        search_fn=make_search_fn(),
+        download_fn=make_download_fn(dl_mod.download),
+        state=load_state(state_path),
+        song_dir=song_dir,
+    )
+
+
+def _run_discover_once():
+    """Build deps and run one weekly pass. Best-effort; logs and swallows errors."""
+    try:
+        deps = _build_discover_deps()
+        if deps is None:
+            return {"status": "disabled", "reason": "navidrome creds missing"}
+        from discover.engine import run_weekly
+        cfg = {}
+        try:
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+        count = (cfg.get("discover") or {}).get("weekly_count", 30)
+        result = run_weekly(deps, count=count)
+        logger.info("[DISCOVER] run complete: %s", result)
+        return {"status": "ok", **result}
+    except Exception as e:
+        logger.exception("[DISCOVER] run failed")
+        return {"status": "error", "error": str(e)}
+
+
+def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
+    while True:
+        logger.info("[DISCOVER] weekly cycle starting")
+        _run_discover_once()
+        time.sleep(period_seconds)
+
+
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -48,6 +114,13 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
+
+        if self.path.rstrip('/') == '/discover/run':
+            result = _run_discover_once()
+            code = 200 if result.get("status") in ("ok", "disabled") else 500
+            self._set_headers(code)
+            self.wfile.write(json.dumps(result).encode())
+            return
 
         try:
             data = json.loads(post_data.decode('utf-8'))
@@ -263,6 +336,10 @@ def start_background_server(port=5000):
     t_ref = threading.Thread(target=_refresh_sc_client_id_loop, args=(3600,), daemon=True)
     t_ref.start()
     logger.info('Started background sc_client_id refresher thread')
+
+    t_disc = threading.Thread(target=_discover_weekly_loop, daemon=True)
+    t_disc.start()
+    logger.info('Started background discover weekly thread')
 
     httpd = HTTPServer(('0.0.0.0', port), SimpleHandler)
     try:
