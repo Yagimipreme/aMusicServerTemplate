@@ -9,5 +9,10 @@
   "ffmpeg_location": "",
   "navidrome_url": "",
   "navidrome_user": "",
-  "navidrome_pass": ""
+  "navidrome_pass": "",
+  "discover": {
+    "enabled": true,
+    "weekly_count": 30,
+    "playlist_name": "Weekly Mix"
+  }
 }

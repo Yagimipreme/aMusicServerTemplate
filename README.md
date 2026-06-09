@@ -104,6 +104,21 @@ You only need to re-export when you change the playlist on Spotify.
 
 ---
 
+## Weekly Mix (automatic discovery)
+
+The server can build a **Weekly Mix** playlist of artists you don't own yet, based on
+who's similar to the artists you already play. It uses Navidrome's similar-artist data,
+downloads a handful of tracks from the new artists, and writes a `Weekly Mix.m3u` that
+Navidrome imports — so the mix shows up in Symfonium with no effort.
+
+- It runs automatically once a week.
+- Trigger it now: `curl -X POST http://localhost:5000/discover/run`
+- Requires Navidrome credentials in `config.json` and its Last.fm agent enabled
+  (Navidrome → Settings; without it there are no similar artists to discover).
+- Tune the size in `config.json` under `"discover": { "weekly_count": 30 }`.
+
+---
+
 ## Common problems
 
 **Extension says "Connection failed"** — the server isn't running, or the URL in the extension's Options is wrong. Click the tray icon → make sure it says "Running"; on the Options page, click **Test connection** to see what's actually responding.
