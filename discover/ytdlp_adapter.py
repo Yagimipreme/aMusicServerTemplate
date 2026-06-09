@@ -29,7 +29,11 @@ def make_search_fn():
 
 
 def make_download_fn(download_callable):
-    """Wrap the existing scripts/sTownload/script_web.py:download into download_fn(url)."""
+    """Wrap a (url -> result) callable into download_fn(url).
+
+    In production this wraps `lambda url: script_web.download_url(url, song_dir)`,
+    whose result is `(playlist_title, [mp3_paths])` — handled by acquire().
+    """
     def download_fn(url):
         return download_callable(url)
     return download_fn

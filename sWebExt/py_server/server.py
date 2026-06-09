@@ -37,7 +37,8 @@ def _build_discover_deps():
     """Assemble engine dependencies from config + existing downloader. Returns deps or None."""
     from types import SimpleNamespace
 
-    sys.path.insert(0, _PROJECT_ROOT)  # make `discover` importable
+    if _PROJECT_ROOT not in sys.path:  # make `discover` importable
+        sys.path.insert(0, _PROJECT_ROOT)
     from discover.config import load_config
     from discover.subsonic import Subsonic
     from discover.state import load_state
@@ -51,7 +52,8 @@ def _build_discover_deps():
         logger.warning("[DISCOVER] navidrome creds missing — engine disabled")
         return None
 
-    # Reuse the existing YouTube downloader's download() + song_dir.
+    # Reuse the existing YouTube downloader's download_url(url, out_dir) + song_dir.
+    # download_url returns (playlist_title, [mp3_paths]); acquire() handles that tuple.
     dl_path = os.path.join(_PROJECT_ROOT, "scripts/sTownload/script_web.py")
     spec = importlib.util.spec_from_file_location("sTownload_web", dl_path)
     dl_mod = importlib.util.module_from_spec(spec)
@@ -62,7 +64,7 @@ def _build_discover_deps():
     return SimpleNamespace(
         subsonic=Subsonic(host, user, pw),
         search_fn=make_search_fn(),
-        download_fn=make_download_fn(dl_mod.download),
+        download_fn=make_download_fn(lambda url: dl_mod.download_url(url, song_dir)),
         state=load_state(state_path),
         song_dir=song_dir,
     )
