@@ -112,3 +112,22 @@ def test_apply_from_config_calls_apply_to_file_when_enabled(tmp_path):
         result = apply_from_config(str(mp3), str(cfg_path))
     assert result is True
     assert mock_tag.title == "Song"
+
+
+def test_clean_title_does_not_strip_mid_word_suffix():
+    # "HD" must not be stripped from inside a word
+    assert clean_title("ADHD") == "ADHD"
+
+
+def test_apply_to_file_does_not_write_empty_title(tmp_path):
+    mp3 = tmp_path / "song.mp3"
+    mp3.write_bytes(b"")
+    mock_tag = MagicMock()
+    mock_tag.title = "HD"  # entire title is a suffix
+    mock_audio = MagicMock()
+    mock_audio.tag = mock_tag
+    with patch("library.tagger.eyed3") as mock_eyed3:
+        mock_eyed3.load.return_value = mock_audio
+        changed = apply_to_file(str(mp3))
+    assert changed is False
+    mock_tag.save.assert_not_called()

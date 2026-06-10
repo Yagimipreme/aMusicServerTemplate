@@ -13,7 +13,7 @@ _BUILTIN_SUFFIXES = [
     "Music Video", "Audio Only", "Official",
     "HD", "HQ", "4K", "1080p", "720p",
     "Full Song", "Full Audio", "Remastered",
-    "Visualizer", "Official Visualizer", "Topic",
+    "Visualizer", "Official Visualizer",
 ]
 
 
@@ -39,7 +39,7 @@ def _build_pattern(suffixes):
         r'\s*(?:'
         r'\((?:' + alt + r')\)'
         r'|\[(?:' + alt + r')\]'
-        r'|(?:' + alt + r')'
+        r'|(?<!\w)(?:' + alt + r')'
         r')\s*$',
         re.IGNORECASE,
     )
@@ -64,7 +64,7 @@ def apply_to_file(path, extra_suffixes_file=None):
             return False
         original = audio.tag.title or ""
         cleaned = clean_title(original, extra_suffixes_file)
-        if cleaned == original:
+        if not cleaned or cleaned == original:
             return False
         audio.tag.title = cleaned
         audio.tag.save()
