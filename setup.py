@@ -169,6 +169,16 @@ def main():
     cfg["lastfm_api_secret"] = lfm_sec
 
     if lfm_key:
+        print("\nStep 6b/10 — Last.fm username (enables Weekly Mix seeds and playlist mix from scrobble history)")
+        print("  This is your Last.fm username (not email). Leave blank to skip scrobble-based features.")
+        lfm_user = _ask("Last.fm username", cfg.get("lastfm_username", ""))
+        if cfg.get("lastfm_username") != lfm_user:
+            changed.append("lastfm_username")
+        cfg["lastfm_username"] = lfm_user
+    else:
+        cfg.setdefault("lastfm_username", cfg.get("lastfm_username", ""))
+
+    if lfm_key:
         print("\n  Add these lines to your navidrome.toml and restart Navidrome:")
         print(f"\n  [LastFM]")
         print(f"  ApiKey = \"{lfm_key}\"")

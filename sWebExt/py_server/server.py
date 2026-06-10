@@ -101,6 +101,199 @@ def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
         time.sleep(period_seconds)
 
 
+# ── Last.fm client factory ─────────────────────────────────────────────────────
+
+def _build_lastfm_client():
+    """Return a LastFMClient if api_key is configured, else None."""
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
+    from discover.config import load_config
+    cfg = load_config(_CONFIG_PATH)
+    api_key = cfg.get("lastfm_api_key", "")
+    if not api_key:
+        return None
+    from lastfm.client import LastFMClient
+    return LastFMClient(api_key)
+
+
+# ── Playlist Mix ───────────────────────────────────────────────────────────────
+
+def _run_playlist_mix(playlist_id: str, count: int) -> dict:
+    """Build a playlist mix from an existing Navidrome playlist using Last.fm signals."""
+    try:
+        if _PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, _PROJECT_ROOT)
+        from discover.config import load_config
+        from discover.subsonic import Subsonic
+        from lastfm.tags import get_artist_tags, build_genre_profile
+        from lastfm.similar import get_similar_artists, get_artist_top_tracks, score_candidates
+
+        cfg = load_config(_CONFIG_PATH)
+        host = cfg.get("navidrome_url", "")
+        user = cfg.get("navidrome_user", "")
+        pw   = cfg.get("navidrome_pass", "")
+        if not host or not user or not pw:
+            return {"status": "disabled", "reason": "navidrome creds missing"}
+
+        api_key = cfg.get("lastfm_api_key", "")
+        if not api_key:
+            return {"status": "disabled", "reason": "lastfm_api_key not configured"}
+
+        from lastfm.client import LastFMClient
+        lfm = LastFMClient(api_key)
+        subsonic = Subsonic(host, user, pw)
+
+        disc = cfg.get("discover") or {}
+        seed_count = disc.get("playlist_seed_artist_count", 10)
+
+        # 1. Fetch playlist
+        pl = subsonic.get_playlist(playlist_id)
+        if not pl:
+            return {"status": "error", "error": f"playlist {playlist_id!r} not found"}
+        source_name = pl.get("name", playlist_id)
+        tracks = pl.get("entry", []) or []
+
+        # 2. Extract seed artists by frequency
+        freq: dict[str, int] = {}
+        canonical: dict[str, str] = {}
+        for t in tracks:
+            a = (t.get("artist") or "").strip()
+            if not a:
+                continue
+            cf = a.casefold()
+            freq[cf] = freq.get(cf, 0) + 1
+            if cf not in canonical:
+                canonical[cf] = a
+
+        ranked_artists = sorted(freq.items(), key=lambda kv: -kv[1])
+        if seed_count and seed_count > 0:
+            ranked_artists = ranked_artists[:seed_count]
+        seed_artists = [canonical[cf] for cf, _ in ranked_artists]
+
+        if not seed_artists:
+            return {"status": "error", "error": "playlist has no tracks with artist tags"}
+
+        # 3. Build genre fingerprint
+        artist_tag_sets = [get_artist_tags(lfm, a) for a in seed_artists]
+        genre_profile = build_genre_profile(artist_tag_sets)
+        logger.info("[PLAYLIST_MIX] genre profile: %s", list(genre_profile.items())[:5])
+
+        # 4. Get similar artists for each seed
+        all_similar: dict[str, float] = {}  # name.casefold() -> best match score
+        canonical_sim: dict[str, str] = {}
+        seed_set = {a.casefold() for a in seed_artists}
+        for a in seed_artists:
+            sims = get_similar_artists(lfm, a, limit=50)
+            for s in sims:
+                cf = s["name"].casefold()
+                if cf in seed_set:
+                    continue
+                if cf not in all_similar or s["match"] > all_similar[cf]:
+                    all_similar[cf] = s["match"]
+                    canonical_sim[cf] = s["name"]
+
+        if not all_similar:
+            return {"status": "error", "error": "no similar artists found via Last.fm"}
+
+        # 5. Get tags for each candidate + score
+        similar_list = [{"name": canonical_sim[cf], "match": m}
+                        for cf, m in all_similar.items()]
+        candidate_tags: dict[str, list] = {}
+        for sim in similar_list:
+            cf = sim["name"].casefold()
+            candidate_tags[cf] = get_artist_tags(lfm, sim["name"])
+
+        scored = score_candidates(similar_list, genre_profile, candidate_tags)
+        top_candidates = [s for s in scored if s["score"] > 0 or not genre_profile]
+        if not top_candidates:
+            top_candidates = scored  # fallback: use all
+
+        # 6. Get top tracks for candidates and collect song IDs from Navidrome
+        acquired_ids = []
+        for candidate in top_candidates:
+            if len(acquired_ids) >= count:
+                break
+            top_tracks = get_artist_top_tracks(lfm, candidate["name"], limit=5)
+            for track in top_tracks:
+                if len(acquired_ids) >= count:
+                    break
+                hits = subsonic.search_songs(
+                    f"{track['artist']} {track['title']}", count=1
+                )
+                if hits:
+                    sid = hits[0].get("id")
+                    if sid and sid not in acquired_ids:
+                        acquired_ids.append(sid)
+
+        if not acquired_ids:
+            return {"status": "error", "error": "no matching tracks found in library"}
+
+        mix_name = f"Mix: {source_name}"
+        subsonic.create_or_update_playlist(mix_name, acquired_ids)
+        try:
+            subsonic.start_scan()
+        except Exception:
+            pass
+
+        return {
+            "status": "ok",
+            "playlist_name": mix_name,
+            "acquired": len(acquired_ids),
+            "skipped": count - len(acquired_ids),
+        }
+    except Exception as e:
+        logger.exception("[PLAYLIST_MIX] failed")
+        return {"status": "error", "error": str(e)}
+
+
+# ── Enrich scheduler ───────────────────────────────────────────────────────────
+
+_enrich_running = threading.Lock()
+_enrich_last_result: dict = {"status": "idle"}
+
+
+def _run_enrich_once(limit=None) -> dict:
+    """Run one library enrichment pass. Returns result dict."""
+    global _enrich_last_result
+    if not _enrich_running.acquire(blocking=False):
+        logger.warning("[ENRICH] Already running — skipping")
+        return {"status": "skipped", "reason": "already running"}
+    try:
+        if _PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, _PROJECT_ROOT)
+        from discover.config import load_config
+        cfg = load_config(_CONFIG_PATH)
+        api_key = cfg.get("lastfm_api_key", "")
+        if not api_key:
+            result = {"status": "disabled", "reason": "lastfm_api_key not configured"}
+            _enrich_last_result = result
+            return result
+        song_dir = cfg.get("song_dir", "")
+        if not song_dir:
+            result = {"status": "disabled", "reason": "song_dir not set"}
+            _enrich_last_result = result
+            return result
+        enrich_cfg = cfg.get("enrich") or {}
+        only_missing = enrich_cfg.get("only_missing_genre", True)
+        from lastfm.client import LastFMClient
+        from library.enrich import run as enrich_run
+        lfm = LastFMClient(api_key)
+        result = enrich_run(song_dir, lfm,
+                            only_missing_genre=only_missing,
+                            limit=limit)
+        result["status"] = "ok"
+        logger.info("[ENRICH] complete: %s", result)
+        _enrich_last_result = result
+        return result
+    except Exception as e:
+        logger.exception("[ENRICH] failed")
+        result = {"status": "error", "error": str(e)}
+        _enrich_last_result = result
+        return result
+    finally:
+        _enrich_running.release()
+
+
 # ── Dedup scheduler ────────────────────────────────────────────────────────────
 
 _dedup_running = threading.Lock()
@@ -180,6 +373,43 @@ class SimpleHandler(BaseHTTPRequestHandler):
             code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
             self._set_headers(code)
             self.wfile.write(json.dumps(result).encode())
+            return
+
+        if self.path.rstrip('/') == '/discover/playlist_mix':
+            try:
+                body = json.loads(post_data.decode('utf-8')) if post_data else {}
+            except Exception:
+                body = {}
+            playlist_id = body.get('playlist_id', '')
+            if not playlist_id:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "error": "playlist_id required"}).encode())
+                return
+            cfg_disc = {}
+            try:
+                with open(_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    cfg_disc = json.load(f).get('discover') or {}
+            except Exception:
+                pass
+            count = body.get('count', cfg_disc.get('playlist_mix_count', 20))
+            result = _run_playlist_mix(playlist_id, count)
+            code = 200 if result.get("status") in ("ok", "error", "disabled") else 500
+            self._set_headers(code)
+            self.wfile.write(json.dumps(result).encode())
+            return
+
+        if self.path.rstrip('/') == '/library/enrich':
+            try:
+                body = json.loads(post_data.decode('utf-8')) if post_data else {}
+            except Exception:
+                body = {}
+            limit = body.get('limit', None)
+            def _enrich_bg():
+                _run_enrich_once(limit=limit)
+            t = threading.Thread(target=_enrich_bg, daemon=True)
+            t.start()
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"status": "started"}).encode())
             return
 
         try:
@@ -267,6 +497,10 @@ class SimpleHandler(BaseHTTPRequestHandler):
             # button without exposing Navidrome creds to the browser side.
             if self.path.rstrip('/') == '/playlists':
                 return self._get_playlists()
+            if self.path.rstrip('/') == '/library/enrich/status':
+                self._set_headers(200)
+                self.wfile.write(json.dumps(_enrich_last_result).encode())
+                return
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "ok", "pid": os.getpid(), "cwd": os.getcwd()}).encode())
         except Exception:

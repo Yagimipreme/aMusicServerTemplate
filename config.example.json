@@ -13,10 +13,19 @@
   "spotify_playlists_dir": "",
   "lastfm_api_key": "",
   "lastfm_api_secret": "",
+  "lastfm_username": "",
   "discover": {
     "enabled": true,
     "weekly_count": 30,
-    "playlist_name": "Weekly Mix"
+    "playlist_name": "Weekly Mix",
+    "lastfm_period": "1month",
+    "seed_artist_count": 20,
+    "playlist_mix_count": 20,
+    "playlist_seed_artist_count": 10
+  },
+  "enrich": {
+    "enabled": false,
+    "only_missing_genre": true
   },
   "dedup": {
     "enabled": false,

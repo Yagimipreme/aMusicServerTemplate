@@ -60,6 +60,46 @@ class Subsonic:
         songs = (sr.get("searchResult3", {}) or {}).get("song", []) or []
         return len(songs) > 0
 
+    def get_playlist(self, playlist_id: str) -> dict:
+        """Return playlist metadata + tracks list from Navidrome."""
+        sr = self._call("getPlaylist.view", id=playlist_id)
+        return (sr.get("playlist", {}) or {})
+
+    def create_or_update_playlist(self, name: str, song_ids: list) -> str:
+        """Create (or overwrite) a playlist with the given name and song IDs.
+
+        Returns the playlist id.
+        """
+        # Check if a playlist with this name already exists
+        plsr = self._call("getPlaylists.view")
+        playlists = (plsr.get("playlists", {}) or {}).get("playlist", []) or []
+        existing_id = None
+        for pl in playlists:
+            if (pl.get("name") or "") == name:
+                existing_id = pl.get("id")
+                break
+
+        if existing_id:
+            # Delete existing tracks and re-add
+            self._call("updatePlaylist.view", playlistId=existing_id,
+                       **{f"songIndexToRemove[{i}]": i
+                          for i in range(999)})
+            # Simpler: delete and recreate
+            self._call("deletePlaylist.view", id=existing_id)
+
+        # Create fresh
+        params = {"name": name}
+        params.update({f"songId[{i}]": sid for i, sid in enumerate(song_ids)})
+        sr = self._call("createPlaylist.view", **params)
+        pl = sr.get("playlist", {}) or {}
+        return pl.get("id", "")
+
+    def search_songs(self, query: str, count: int = 5) -> list:
+        """Search for songs by query string, returning list of song dicts."""
+        sr = self._call("search3.view", query=query,
+                        songCount=count, albumCount=0, artistCount=0)
+        return (sr.get("searchResult3", {}) or {}).get("song", []) or []
+
     def start_scan(self) -> bool:
         sr = self._call("startScan.view")
         return sr.get("status") == "ok"
