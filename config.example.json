@@ -21,7 +21,16 @@
     "lastfm_period": "1month",
     "seed_artist_count": 20,
     "playlist_mix_count": 20,
-    "playlist_seed_artist_count": 10
+    "playlist_seed_artist_count": 10,
+    "schedule": "weekly",
+    "run_day": "sunday",
+    "run_hour": 22,
+    "bootstrap_playlist_name": "Starter Mix",
+    "manual_seeds": [],
+    "lastfm_readiness": {
+      "min_scrobbles": 100,
+      "min_unique_artists": 15
+    }
   },
   "enrich": {
     "enabled": false,

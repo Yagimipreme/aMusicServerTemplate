@@ -56,6 +56,10 @@ if _PROJECT_ROOT not in sys.path:
 
 _import_jobs: dict = {}  # job_id -> {total, done, errors, tracks: [{title, status}]}
 
+# ── SC client readiness flag ──────────────────────────────────────────────────
+
+_sc_client_ready = False
+
 # ── Enrich state ──────────────────────────────────────────────────────────────
 
 _enrich_running = threading.Lock()
@@ -122,11 +126,63 @@ def _run_discover_once():
         return {"status": "error", "error": str(e)}
 
 
+def _seconds_until_next_run(schedule: str, run_day: str, run_hour: int) -> float:
+    import datetime as _dt
+    now = _dt.datetime.now()
+    if schedule == "daily":
+        candidate = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += _dt.timedelta(days=1)
+        return (candidate - now).total_seconds()
+    else:  # weekly
+        day_map = {"sun": 6, "mon": 0, "tue": 1, "wed": 2,
+                   "thu": 3, "fri": 4, "sat": 5}
+        target_wd = day_map.get(run_day.lower()[:3], 6)
+        days_ahead = (target_wd - now.weekday()) % 7
+        candidate = (now + _dt.timedelta(days=days_ahead)).replace(
+            hour=run_hour, minute=0, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += _dt.timedelta(weeks=1)
+        return (candidate - now).total_seconds()
+
+
 def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
+    # Initial run: if discover_state.json has no last_run and Navidrome has songs, run immediately
+    state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            _state = json.load(f)
+        has_last_run = "last_run" in _state
+    except Exception:
+        has_last_run = False
+
+    if not has_last_run:
+        try:
+            cfg_initial = _get_config()
+            host_i = cfg_initial.get("navidrome_url", "")
+            user_i = cfg_initial.get("navidrome_user", "")
+            pw_i = cfg_initial.get("navidrome_pass", "")
+            if host_i and user_i and pw_i:
+                from discover.subsonic import Subsonic as _Sub
+                sub_i = _Sub(host_i, user_i, pw_i)
+                artists_i = sub_i.get_frequent_artists(size=1)
+                if artists_i:
+                    logger.info("[DISCOVER] No last_run found and library has songs — running initial mix")
+                    _run_discover_once()
+        except Exception:
+            logger.warning("[DISCOVER] initial-run check failed", exc_info=True)
+
     while True:
-        logger.info("[DISCOVER] weekly cycle starting")
+        cfg = _get_config()
+        disc = cfg.get("discover") or {}
+        schedule = disc.get("schedule", "weekly")
+        run_day = disc.get("run_day", "sunday")
+        run_hour = disc.get("run_hour", 22)
+        sleep_secs = _seconds_until_next_run(schedule, run_day, run_hour)
+        logger.info("[DISCOVER] next run in %.0f seconds (%s %s @%d:00)", sleep_secs, schedule, run_day, run_hour)
+        time.sleep(sleep_secs)
+        logger.info("[DISCOVER] scheduled cycle starting")
         _run_discover_once()
-        time.sleep(period_seconds)
 
 
 def _run_playlist_mix(playlist_id: str, count: int) -> dict:
@@ -308,10 +364,12 @@ def _dedup_scheduled_loop():
 
 
 def _refresh_sc_client_id_loop(period_seconds=3600):
+    global _sc_client_ready
     script_fp = os.path.join(_PROJECT_ROOT, "scripts/Sc2Sp_src/script_web.py")
     cycle = 0
     while True:
         cycle += 1
+        _sc_client_ready = False
         try:
             if os.path.exists(script_fp):
                 spec   = importlib.util.spec_from_file_location("sc2_web_helper", script_fp)
@@ -335,8 +393,14 @@ def _refresh_sc_client_id_loop(period_seconds=3600):
                             with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
                                 json.dump(cfg, f, ensure_ascii=False, indent=2)
                             logger.info("[SC-REFRESH] Persisted sc_client_id")
+                            _sc_client_ready = True
                     except Exception:
                         logger.exception("[SC-REFRESH] fetch_client_id_via_selenium raised")
+            else:
+                # No selenium script; try loading from config directly
+                cfg = _get_config()
+                if cfg.get("sc_client_id"):
+                    _sc_client_ready = True
         except Exception:
             logger.exception("[SC-REFRESH] Unhandled error in cycle %d", cycle)
         time.sleep(period_seconds)
@@ -542,6 +606,8 @@ def sc_search_users():
     q = request.args.get("q", "")
     if not q:
         return jsonify({"status": "error", "error": "q required"}), 400
+    if not _sc_client_ready:
+        return jsonify({"status": "connecting", "reason": "SoundCloud client initializing", "retry_after": 30})
     sc = _get_sc_client()
     if not sc:
         return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
@@ -559,6 +625,8 @@ def sc_search_tracks():
     q = request.args.get("q", "")
     if not q:
         return jsonify({"status": "error", "error": "q required"}), 400
+    if not _sc_client_ready:
+        return jsonify({"status": "connecting", "reason": "SoundCloud client initializing", "retry_after": 30})
     sc = _get_sc_client()
     if not sc:
         return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
@@ -770,6 +838,35 @@ def import_tracks():
                 sub.start_scan()
         except Exception:
             pass
+
+        # Create Navidrome playlist with successfully downloaded tracks
+        if playlist_name and playlist_name != "Import":
+            try:
+                from discover.subsonic import Subsonic
+                cfg3 = _get_config()
+                sub3 = Subsonic(cfg3.get("navidrome_url",""), cfg3.get("navidrome_user",""), cfg3.get("navidrome_pass",""))
+                # search for each downloaded track by title+artist and collect song IDs
+                song_ids = []
+                for i, track in enumerate(tracks):
+                    if job["tracks"][i]["status"] == "done":
+                        results = sub3.search_songs(track.get("title",""), track.get("artist",""), count=1)
+                        if results:
+                            song_ids.append(results[0].get("id"))
+                if song_ids:
+                    sub3.create_or_update_playlist(playlist_name, song_ids)
+            except Exception:
+                logger.exception("[IMPORT] playlist creation failed")
+
+        # Write failed tracks log
+        failed_tracks = [t for t in job["tracks"] if t["status"] == "error"]
+        if failed_tracks and playlist_name:
+            import re
+            safe = re.sub(r"[^\w\-]", "_", playlist_name)
+            logs_dir = os.path.join(_PROJECT_ROOT, "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            with open(os.path.join(logs_dir, f"import_{safe}_failed.txt"), "w", encoding="utf-8") as lf:
+                for t in failed_tracks:
+                    lf.write(f"{t.get('artist','')} — {t.get('title','')}\n")
 
     t = threading.Thread(target=_run_import, daemon=True)
     t.start()

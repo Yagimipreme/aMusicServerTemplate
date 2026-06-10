@@ -70,6 +70,18 @@ def get_set_tracks(client, playlist_id) -> list:
     return [_track_from_raw(t) for t in (data.get("tracks") or [])]
 
 
+def get_user_likes(client, user_id, limit: int = 500) -> list:
+    """Return the user's liked tracks (heart/likes feed)."""
+    data = client.get(f"/users/{user_id}/likes", params={"limit": limit})
+    tracks = []
+    for item in (data.get("collection") or []):
+        # Likes feed wraps each track under a "track" key
+        raw = item.get("track") or item
+        if raw.get("kind") == "track" or raw.get("id"):
+            tracks.append(_track_from_raw(raw))
+    return tracks
+
+
 def get_profile(client, url: str) -> dict:
     """Resolve a URL and return {user, tracks, sets}."""
     entity = resolve(client, url)

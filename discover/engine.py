@@ -1,4 +1,7 @@
+import json
 import logging
+import os
+import datetime
 
 from discover.seeds import collect_seeds
 from discover.expand import expand_similar
@@ -8,6 +11,8 @@ from discover.acquire import acquire
 from discover.assemble import write_weekly_mix
 
 logger = logging.getLogger(__name__)
+
+_STATE_PATH_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "discover_state.json")
 
 
 def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
@@ -48,3 +53,146 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
             logger.exception("discover: scan trigger failed")
 
     return {"acquired": len(acquired_paths), "m3u": m3u}
+
+
+def lastfm_is_ready(client, username, cfg):
+    """Return True if the user has enough Last.fm history for Weekly Mix."""
+    # Check cached result first
+    state_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "discover_state.json"))
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        if state.get("lastfm_ready"):
+            return True
+    except Exception:
+        pass
+
+    if not client or not username:
+        return False
+
+    threshold = (cfg.get("discover") or {}).get("lastfm_readiness", {})
+    min_scrobbles = threshold.get("min_scrobbles", 100)
+    min_artists = threshold.get("min_unique_artists", 15)
+
+    try:
+        # user.getRecentTracks with limit=1 gives total scrobble count in @attr.total
+        recent = client.call("user.getRecentTracks", user=username, limit=1)
+        total = int((recent.get("recenttracks", {}).get("@attr") or {}).get("total", 0))
+        if total < min_scrobbles:
+            return False
+
+        # user.getTopArtists to count unique artists
+        top = client.call("user.getTopArtists", user=username, period="overall", limit=500)
+        artists = top.get("topartists", {}).get("artist", [])
+        if not isinstance(artists, list):
+            artists = [artists] if artists else []
+        if len(artists) < min_artists:
+            return False
+
+        # Cache the positive result
+        try:
+            try:
+                with open(state_path, encoding="utf-8") as f:
+                    state = json.load(f)
+            except Exception:
+                state = {}
+            state["lastfm_ready"] = True
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        logger.warning("discover.engine: lastfm_is_ready check failed", exc_info=True)
+        return False
+
+
+def run_mix(deps, cfg):
+    """Route to bootstrap or Last.fm Weekly Mix based on readiness gate."""
+    disc = cfg.get("discover") or {}
+    lastfm_client = getattr(deps, "lastfm_client", None)
+    lastfm_username = cfg.get("lastfm_username", "")
+
+    if lastfm_client and lastfm_is_ready(lastfm_client, lastfm_username, cfg):
+        playlist_name = disc.get("playlist_name", "Weekly Mix")
+        count = disc.get("weekly_count", 30)
+        seed_limit = disc.get("seed_artist_count", 20)
+        return run_weekly(deps, count=count, seed_limit=seed_limit,
+                         playlist_name=playlist_name)
+    else:
+        # Bootstrap path
+        playlist_name = disc.get("bootstrap_playlist_name", "Starter Mix")
+        count = disc.get("weekly_count", 30)
+        from discover.seeds import get_bootstrap_seeds
+        seeds = get_bootstrap_seeds(cfg, deps.subsonic, lastfm_client)
+        logger.info("discover: bootstrap seeds: %d", len(seeds))
+        if not seeds:
+            logger.warning("discover: no bootstrap seeds available")
+            return {"acquired": 0, "m3u": None}
+        # reuse the existing expansion/acquire pipeline
+        artists = expand_similar(deps.subsonic, seeds, per_seed=20)
+        candidates = resolve_tracks(deps.search_fn, artists, per_artist=1)
+        fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
+        acquired_paths = []
+        for c in fresh:
+            if len(acquired_paths) >= count:
+                break
+            paths = acquire(deps.download_fn, c)
+            if not paths:
+                continue
+            remaining = count - len(acquired_paths)
+            acquired_paths.extend(paths[:remaining])
+            deps.state.add(track_key(c["artist"], c["title"]))
+        m3u = None
+        if acquired_paths:
+            deps.state.save()
+            m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
+            try:
+                deps.subsonic.start_scan()
+            except Exception:
+                logger.exception("discover: scan trigger failed")
+        return {"acquired": len(acquired_paths), "m3u": m3u}
+
+
+def run_mix_from_config(project_root: str):
+    """Build a Deps object from config.json at project_root and call run_mix().
+    Used by --generate-mix CLI and the Starter Mix background trigger."""
+    import sys
+    sys.path.insert(0, project_root)
+    from discover.config import load_config
+    from discover.subsonic import Subsonic
+    from discover.state import DiscoverState
+    from discover import ytdlp_adapter
+    cfg = load_config(os.path.join(project_root, "config.json"))
+    disc = cfg.get("discover") or {}
+    if not disc.get("enabled", True):
+        return {"acquired": 0, "m3u": None, "reason": "discover disabled"}
+    host = cfg.get("navidrome_url", "")
+    user = cfg.get("navidrome_user", "")
+    pw = cfg.get("navidrome_pass", "")
+    if not host:
+        return {"acquired": 0, "m3u": None, "reason": "navidrome_url not set"}
+    subsonic = Subsonic(host, user, pw)
+    state = DiscoverState(os.path.join(project_root, "discover_state.json"))
+    song_dir = cfg.get("song_dir", "")
+
+    lastfm_client = None
+    lfm_key = cfg.get("lastfm_api_key", "")
+    if lfm_key:
+        try:
+            from lastfm.client import LastFMClient
+            lastfm_client = LastFMClient(lfm_key)
+        except Exception:
+            pass
+
+    class Deps:
+        pass
+    deps = Deps()
+    deps.subsonic = subsonic
+    deps.state = state
+    deps.song_dir = song_dir
+    deps.search_fn = ytdlp_adapter.search
+    deps.download_fn = ytdlp_adapter.download
+    deps.lastfm_client = lastfm_client
+
+    return run_mix(deps, cfg)

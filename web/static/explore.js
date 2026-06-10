@@ -52,6 +52,11 @@ async function scSearch() {
   if (isUrl) {
     const resp = await fetch(`/sc/resolve?url=${encodeURIComponent(q)}`);
     const data = await resp.json();
+    if (data.status === "connecting") {
+      showError("sc-user-list", `SoundCloud connecting… retrying in ${data.retry_after || 30}s`);
+      setTimeout(scSearch, (data.retry_after || 30) * 1000);
+      return;
+    }
     if (data.status === "ok") {
       renderTracks(data.tracks || []);
       document.getElementById("sc-subtabs").style.display = "none";
@@ -69,6 +74,11 @@ async function scSearch() {
     ]);
     const usersData = await usersResp.json();
     const tracksData = await tracksResp.json();
+    if (usersData.status === "connecting") {
+      showError("sc-user-list", `SoundCloud connecting… retrying in ${usersData.retry_after || 30}s`);
+      setTimeout(scSearch, (usersData.retry_after || 30) * 1000);
+      return;
+    }
     renderUsers("sc-user-list", usersData.users || []);
     renderTracksInto("sc-track-list", tracksData.tracks || []);
   }
@@ -158,10 +168,94 @@ async function parseShare() {
   const resp = await fetch("/share/parse", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({text})});
   const data = await resp.json();
   if (data.status === "ok") {
-    renderTracks(data.tracks || []);
+    const tracksWithSource = (data.tracks || []).map(t => {
+      const url = t.url || t.permalink_url || "";
+      let source = t.source || "unknown";
+      if (!t.source) {
+        if (url.includes("soundcloud.com")) source = "sc";
+        else if (url.includes("youtube.com") || url.includes("youtu.be")) source = "yt";
+      }
+      return {...t, source};
+    });
+    renderTracks(tracksWithSource);
   } else {
     showError("import-track-list", data.error || "Parse error");
   }
+}
+
+// ── Share (outgoing) ──────────────────────────────────────────────────────────
+
+async function shareTrack(track) {
+  const params = new URLSearchParams({
+    artist: track.artist || "",
+    title: track.title || "",
+    url: track.permalink_url || track.url || "",
+  });
+  try {
+    const resp = await fetch(`/share/link?${params}`);
+    const data = await resp.json();
+    if (data.url) {
+      await navigator.clipboard.writeText(data.url);
+      showToast("Share link copied!");
+    }
+  } catch (e) {
+    showToast("Could not copy link");
+  }
+}
+
+async function shareAllTracks() {
+  if (!allTracks.length) return;
+  const name = document.title || "Shared Playlist";
+  const body = { name, tracks: allTracks.map(t => ({
+    artist: t.artist || "", title: t.title || "",
+    url: t.permalink_url || t.url || ""
+  }))};
+  try {
+    const resp = await fetch("/share/code", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (data.text) {
+      showShareModal(data.text);
+    }
+  } catch (e) {
+    showToast("Could not generate share code");
+  }
+}
+
+function showToast(msg) {
+  let toast = document.getElementById("share-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "share-toast";
+    toast.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;z-index:9999;font-size:14px;opacity:0;transition:opacity .2s";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = "1";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { toast.style.opacity = "0"; }, 2000);
+}
+
+function showShareModal(text) {
+  let modal = document.getElementById("share-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "share-modal";
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999";
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:24px;max-width:480px;width:90%;position:relative">
+        <button onclick="document.getElementById('share-modal').remove()" style="position:absolute;top:12px;right:16px;background:none;border:none;font-size:18px;cursor:pointer">✕</button>
+        <h3 style="margin:0 0 12px">Share Playlist</h3>
+        <textarea id="share-modal-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;resize:vertical" readonly></textarea>
+        <button onclick="navigator.clipboard.writeText(document.getElementById('share-modal-text').value).then(()=>showToast('Copied!'))" style="margin-top:12px;padding:8px 20px;background:#967BB6;color:#fff;border:none;border-radius:6px;cursor:pointer">Copy All</button>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById("share-modal-text").value = text;
+  document.getElementById("share-modal").style.display = "flex";
 }
 
 // Pre-load import payload from URL fragment
@@ -264,6 +358,12 @@ function makeTrackRow(track, idx) {
     previewEl.addEventListener("click", () => playPreview(track, previewEl));
   }
 
+  const shareBtn = document.createElement("button");
+  shareBtn.className = "share-btn";
+  shareBtn.title = "Copy share link";
+  shareBtn.textContent = "⬆";
+  shareBtn.addEventListener("click", e => { e.stopPropagation(); shareTrack(track); });
+
   li.appendChild(cb);
   li.appendChild(img);
   li.appendChild(info);
@@ -271,6 +371,7 @@ function makeTrackRow(track, idx) {
   li.appendChild(dur);
   li.appendChild(previewEl);
   li.appendChild(statusIcon);
+  li.appendChild(shareBtn);
 
   return li;
 }
@@ -324,6 +425,8 @@ document.getElementById("save-all").addEventListener("click", () => {
   saveAllTotal = allTracks.length;
   sendNextBatch();
 });
+
+document.getElementById("share-playlist-btn").addEventListener("click", shareAllTracks);
 
 async function sendNextBatch() {
   const batch = allTracks.slice(saveAllOffset, saveAllOffset + 50);

@@ -1,4 +1,5 @@
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -69,3 +70,72 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
             seen.add(cf)
 
     return merged[:limit]
+
+
+def get_bootstrap_seeds(cfg, subsonic, lastfm_client=None):
+    """Collect cold-start seeds from manual config, Spotify CSVs, and library frequency."""
+    seeds = []
+
+    # 1. Manual seeds (highest priority)
+    manual = (cfg.get("discover") or {}).get("manual_seeds", [])
+    seeds.extend(manual)
+
+    # 2. Artists from Spotify CSVs
+    csv_dir = cfg.get("spotify_playlists_dir", "")
+    if csv_dir:
+        seeds.extend(get_csv_artists(csv_dir, limit=30))
+
+    # 3. Library frequency from Navidrome
+    try:
+        seeds.extend(get_library_artist_frequency(subsonic, limit=20))
+    except Exception:
+        logger.warning("discover.seeds: could not fetch library artist frequency", exc_info=True)
+
+    # Dedup preserving insertion order
+    seen, result = set(), []
+    for s in seeds:
+        # seeds may be dicts (from subsonic) or plain strings
+        name = s.get("name", "") if isinstance(s, dict) else s
+        cf = name.casefold()
+        if name and cf not in seen:
+            seen.add(cf)
+            result.append(name)
+
+    return result[:20]
+
+
+def get_csv_artists(csv_dir: str, limit: int = 30) -> list:
+    """Return up to `limit` unique artist names from all *.csv files in csv_dir."""
+    import glob, csv as csv_mod
+    artists = []
+    seen = set()
+    for path in sorted(glob.glob(os.path.join(csv_dir, "*.csv"))):
+        try:
+            with open(path, encoding="utf-8", newline="") as f:
+                reader = csv_mod.DictReader(f)
+                for row in reader:
+                    # Exportify CSVs have "Artist Name" or "Artist Name(s)"
+                    artist = (row.get("Artist Name(s)") or row.get("Artist Name") or
+                              row.get("artist") or "").strip()
+                    # May be comma-separated list; take first
+                    if "," in artist:
+                        artist = artist.split(",")[0].strip()
+                    if artist and artist.casefold() not in seen:
+                        seen.add(artist.casefold())
+                        artists.append(artist)
+                        if len(artists) >= limit:
+                            return artists
+        except Exception:
+            logger.debug("get_csv_artists: could not read %s", path, exc_info=True)
+    return artists
+
+
+def get_library_artist_frequency(subsonic, limit: int = 20) -> list:
+    """Return up to `limit` artist names sorted by track count in the Navidrome library."""
+    try:
+        artists = subsonic.get_frequent_artists(size=200)
+        # get_frequent_artists already returns them sorted by play count
+        return [a["name"] for a in artists[:limit] if a.get("name")]
+    except Exception:
+        logger.warning("discover.seeds: get_library_artist_frequency failed", exc_info=True)
+        return []
