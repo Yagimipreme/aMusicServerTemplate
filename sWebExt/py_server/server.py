@@ -401,12 +401,10 @@ def start_background_server(port=5000):
     t_disc.start()
     logger.info('Started background discover weekly thread')
 
-    _cfg_at_start = {}
-    try:
-        with open(_CONFIG_PATH, encoding="utf-8") as _f:
-            _cfg_at_start = json.load(_f)
-    except Exception:
-        pass
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
+    from discover.config import load_config as _load_cfg
+    _cfg_at_start = _load_cfg(_CONFIG_PATH)
     if _cfg_at_start.get("dedup", {}).get("enabled"):
         t_dedup = threading.Thread(target=_dedup_scheduled_loop, daemon=True)
         t_dedup.start()
