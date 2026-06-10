@@ -224,6 +224,15 @@ def process_track(href: str, client_id: str, out_dir: str = ".", title_override:
             raise RuntimeError("All HLS transcodings returned 4xx — track may be geo-blocked or Go+ only.")
 
         run_ffmpeg_to_mp3(m3u8, mp3, art_out_path=cover)
+
+        # Apply title cleanup via library/tagger
+        try:
+            if _PROJECT_ROOT not in sys.path:
+                sys.path.insert(0, _PROJECT_ROOT)
+            from library.tagger import apply_from_config
+            apply_from_config(mp3, _CONFIG_PATH)
+        except Exception:
+            pass  # tagger is non-critical
     finally:
         if cover and os.path.exists(cover):
             try:

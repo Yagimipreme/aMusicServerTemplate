@@ -287,6 +287,14 @@ def main(argv):
                     audio.tag.save()
             except Exception:
                 logger.exception('Tagging failed for %s', path)
+        # Apply title cleanup via library/tagger
+        try:
+            if _PROJECT_ROOT not in sys.path:
+                sys.path.insert(0, _PROJECT_ROOT)
+            from library.tagger import apply_from_config
+            apply_from_config(path, _CONFIG_PATH)
+        except Exception:
+            logger.exception('Title cleanup failed for %s', path)
 
     trigger_navidrome_scan()
     return 0

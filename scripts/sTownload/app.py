@@ -8,6 +8,7 @@ from yt_dlp.utils import PostProcessingError, DownloadError
 import logging
 import eyed3
 import os
+import sys
 import re
 import csv
 import json
@@ -125,6 +126,14 @@ def process_tracks(tracks: list[dict], playlist_name: str):
             audiofile.tag.artist = ", ".join(artists) if artists else ""
             audiofile.tag.album  = album
             audiofile.tag.save()
+        # Apply title cleanup via library/tagger
+        try:
+            if PROJECT_ROOT not in sys.path:
+                sys.path.insert(0, PROJECT_ROOT)
+            from library.tagger import apply_from_config
+            apply_from_config(audio_path, os.path.join(PROJECT_ROOT, "config.json"))
+        except Exception as _te:
+            print(f"  [WARNING] Title cleanup failed: {_te}")
 
         # Clean up cover
         if os.path.exists(cover_path):
