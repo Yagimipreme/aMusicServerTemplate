@@ -276,7 +276,7 @@ async function shareTrack(track) {
     const resp = await fetch(`/share/link?${params}`);
     const data = await resp.json();
     if (data.url) {
-      await navigator.clipboard.writeText(data.url);
+      await copyText(data.url);
       showToast("Share link copied!");
     }
   } catch (e) {
@@ -308,6 +308,22 @@ async function shareAllTracks() {
   }
 }
 
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  // Fallback for plain HTTP (LAN access) — works on all browsers
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:-999px;left:-999px;opacity:0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+}
+
 function showToast(msg) {
   let toast = document.getElementById("share-toast");
   if (!toast) {
@@ -336,7 +352,7 @@ function showShareModal(text) {
         <textarea id="share-modal-text" rows="10"
                   style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;resize:vertical;border:1px solid #ccc;border-radius:6px;padding:8px"
                   readonly></textarea>
-        <button onclick="navigator.clipboard.writeText(document.getElementById('share-modal-text').value).then(()=>showToast('Copied!'))"
+        <button onclick="copyText(document.getElementById('share-modal-text').value).then(()=>showToast('Copied!'))"
                 style="margin-top:12px;padding:8px 20px;background:#967BB6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">
           Copy All
         </button>
