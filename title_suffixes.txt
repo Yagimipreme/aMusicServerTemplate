@@ -1,0 +1,7 @@
+# Add your own suffixes here, one per line.
+# Lines starting with # are comments.
+# The server strips these from song titles after every download.
+# Example entries (uncomment to activate):
+# Live Performance
+# Exclusive
+# Fan Made

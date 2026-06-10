@@ -10,9 +10,21 @@
   "navidrome_url": "",
   "navidrome_user": "",
   "navidrome_pass": "",
+  "spotify_playlists_dir": "",
+  "lastfm_api_key": "",
+  "lastfm_api_secret": "",
   "discover": {
     "enabled": true,
     "weekly_count": 30,
     "playlist_name": "Weekly Mix"
+  },
+  "dedup": {
+    "enabled": false,
+    "interval_hours": 24,
+    "auto_delete": false
+  },
+  "title_cleanup": {
+    "enabled": true,
+    "extra_suffixes_file": "title_suffixes.txt"
   }
 }
