@@ -7,12 +7,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+_MAX_TRACK_SECONDS = 900  # 15 min; filters phone reviews/cooking/loops but keeps DJ edits
+
+
 def make_search_fn():
     """Return search_fn(artist_name, n) -> [{"title", "url"}] via yt-dlp flat search."""
     from yt_dlp import YoutubeDL
 
     def search_fn(artist_name, n):
-        query = f"ytsearch{n}:{artist_name}"
+        # Append "music" so generic names (Chip, Para …) favour music results over tech/cooking
+        query = f"ytsearch{n}:{artist_name} music"
         opts = {"quiet": True, "skip_download": True, "extract_flat": "in_playlist"}
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(query, download=False)
@@ -21,8 +25,12 @@ def make_search_fn():
         for e in entries:
             vid = e.get("id")
             url = e.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else None)
-            if url:
-                out.append({"title": e.get("title", ""), "url": url})
+            if not url:
+                continue
+            duration = e.get("duration") or 0
+            if duration and duration > _MAX_TRACK_SECONDS:
+                continue
+            out.append({"title": e.get("title", ""), "url": url})
         return out
 
     return search_fn

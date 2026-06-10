@@ -134,12 +134,22 @@ def get_csv_artists(csv_dir: str, limit: int = 30) -> list:
     return artists
 
 
+def _is_junk_artist_name(name: str) -> bool:
+    """True for names that are clearly not real artists (untagged, channel-style)."""
+    if not name or len(name) < 2:
+        return True
+    # "[Unknown Artist]", "[unknown]", etc.
+    if name.startswith("[") and name.endswith("]"):
+        return True
+    return False
+
+
 def get_library_artist_frequency(subsonic, limit: int = 20) -> list:
     """Return up to `limit` artist dicts (name, id) sorted by play count in the Navidrome library."""
     try:
         artists = subsonic.get_frequent_artists(size=200)
         # get_frequent_artists already returns them sorted by play count
-        return [a for a in artists[:limit] if a.get("name")]
+        return [a for a in artists if a.get("name") and not _is_junk_artist_name(a["name"])][:limit]
     except Exception:
         logger.warning("discover.seeds: get_library_artist_frequency failed", exc_info=True)
         return []
