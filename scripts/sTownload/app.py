@@ -132,8 +132,8 @@ def process_tracks(tracks: list[dict], playlist_name: str):
                 sys.path.insert(0, PROJECT_ROOT)
             from library.tagger import apply_from_config
             apply_from_config(audio_path, os.path.join(PROJECT_ROOT, "config.json"))
-        except Exception as _te:
-            print(f"  [WARNING] Title cleanup failed: {_te}")
+        except Exception:
+            logger.warning("Title cleanup failed for %s", audio_path)
 
         # Clean up cover
         if os.path.exists(cover_path):
