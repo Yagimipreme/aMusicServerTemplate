@@ -1,11 +1,11 @@
-/* explore.js — Explore UI vanilla JS
+/* explore.js — aMusicServer Explore UI
    No framework. Talks to Flask routes via fetch(). */
 
 "use strict";
 
 // ── State ──────────────────────────────────────────────────────────────────────
 
-let allTracks = [];       // full track list for current view
+let allTracks = [];
 let selectedIds = new Set();
 let currentJobId = null;
 let pollInterval = null;
@@ -26,134 +26,163 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   });
 });
 
-// ── SC sub-tabs ────────────────────────────────────────────────────────────────
+// ── Unified search ─────────────────────────────────────────────────────────────
 
-document.querySelectorAll(".subtab-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const target = btn.dataset.subtab;
-    document.querySelectorAll(".subtab-btn").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    document.querySelectorAll(".subtab-panel").forEach(p => p.style.display = "none");
-    document.getElementById(`${target}-panel`).style.display = "";
-  });
+document.getElementById("search-go").addEventListener("click", doSearch);
+document.getElementById("search-query").addEventListener("keydown", e => {
+  if (e.key === "Enter") doSearch();
 });
 
-// ── SoundCloud ─────────────────────────────────────────────────────────────────
-
-document.getElementById("sc-go").addEventListener("click", scSearch);
-document.getElementById("sc-query").addEventListener("keydown", e => { if (e.key === "Enter") scSearch(); });
-
-async function scSearch() {
-  const q = document.getElementById("sc-query").value.trim();
+async function doSearch() {
+  const q = document.getElementById("search-query").value.trim();
   if (!q) return;
   clearTracks();
+  setHint("Loading…");
 
-  const isUrl = q.startsWith("http");
-  if (isUrl) {
-    const resp = await fetch(`/sc/resolve?url=${encodeURIComponent(q)}`);
-    const data = await resp.json();
-    if (data.status === "connecting") {
-      showError("sc-user-list", `SoundCloud connecting… retrying in ${data.retry_after || 30}s`);
-      setTimeout(scSearch, (data.retry_after || 30) * 1000);
-      return;
-    }
-    if (data.status === "ok") {
-      renderTracks(data.tracks || []);
-      document.getElementById("sc-subtabs").style.display = "none";
+  try {
+    if (q.startsWith("http")) {
+      if (q.includes("soundcloud.com"))          await handleScUrl(q);
+      else if (q.includes("spotify.com/artist/")) await handleSpArtistUrl(q);
+      else if (q.includes("spotify.com/playlist/")) await handleSpPlaylistUrl(q);
+      else if (q.includes("spotify.com/track/"))  await handleSpTrackUrl(q);
+      else if (q.match(/youtube\.com|youtu\.be/)) await handleYtUrl(q);
+      else                                         await handleScUrl(q); // fallback
     } else {
-      showError("sc-user-list", data.error || data.reason || "Error");
+      await handleTextSearch(q);
     }
-  } else {
-    document.getElementById("sc-subtabs").style.display = "flex";
-    document.querySelectorAll(".subtab-panel").forEach(p => p.style.display = "none");
-    document.getElementById("sc-users-panel").style.display = "";
+  } catch (e) {
+    setHint("Error — check the server log.");
+  }
 
-    const [usersResp, tracksResp] = await Promise.all([
-      fetch(`/sc/search/users?q=${encodeURIComponent(q)}`),
-      fetch(`/sc/search/tracks?q=${encodeURIComponent(q)}`),
-    ]);
-    const usersData = await usersResp.json();
-    const tracksData = await tracksResp.json();
-    if (usersData.status === "connecting") {
-      showError("sc-user-list", `SoundCloud connecting… retrying in ${usersData.retry_after || 30}s`);
-      setTimeout(scSearch, (usersData.retry_after || 30) * 1000);
-      return;
-    }
-    renderUsers("sc-user-list", usersData.users || []);
-    renderTracksInto("sc-track-list", tracksData.tracks || []);
+  setHint("");
+}
+
+// ── URL handlers ───────────────────────────────────────────────────────────────
+
+async function handleScUrl(url) {
+  const resp = await fetch(`/sc/resolve?url=${encodeURIComponent(url)}`);
+  const data = await resp.json();
+  if (data.status === "connecting") {
+    setHint(`SoundCloud connecting… retrying in ${data.retry_after || 30}s`);
+    setTimeout(doSearch, (data.retry_after || 30) * 1000);
+    return;
+  }
+  if (data.status === "ok") {
+    renderArtists(data.users || []);
+    renderTracks(data.tracks || []);
+  } else {
+    setHint(data.error || data.reason || "SoundCloud error");
   }
 }
 
-function renderUsers(listId, users) {
-  const ul = document.getElementById(listId);
-  ul.innerHTML = "";
-  users.forEach(u => {
-    const li = document.createElement("li");
-    li.className = "user-item";
-    li.innerHTML = `
-      <img src="${u.avatar_url || ""}" alt="" onerror="this.style.display='none'">
-      <span class="uname">${esc(u.full_name || u.username)}</span>
-    `;
-    li.addEventListener("click", async () => {
-      const url = `https://soundcloud.com/${u.username}`;
-      const resp = await fetch(`/sc/resolve?url=${encodeURIComponent(url)}`);
-      const data = await resp.json();
-      if (data.status === "ok") renderTracks(data.tracks || []);
-    });
-    ul.appendChild(li);
+async function handleSpArtistUrl(url) {
+  const resp = await fetch("/spotify/artist", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({url}),
   });
+  const data = await resp.json();
+  if (data.status === "ok") renderTracks(data.top_tracks || []);
+  else setHint(data.error || "Spotify error");
 }
 
-function renderTracksInto(listId, tracks) {
-  const ul = document.getElementById(listId);
-  ul.innerHTML = "";
-  tracks.forEach((t, i) => ul.appendChild(makeTrackRow(t, i, "sc")));
-  updateSelectedCount();
+async function handleSpPlaylistUrl(url) {
+  const resp = await fetch("/spotify/playlist", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({url}),
+  });
+  const data = await resp.json();
+  if (data.status === "ok") renderTracks(data.tracks || []);
+  else setHint(data.error || "Spotify error");
 }
 
-// ── Spotify ─────────────────────────────────────────────────────────────────────
+async function handleSpTrackUrl(url) {
+  // Single Spotify track — wrap it as a one-item list so the user can save it
+  renderTracks([{title: url.split("/track/")[1]?.split("?")[0] || "Spotify track",
+                 artist: "", url, source: "spotify"}]);
+}
 
-document.getElementById("sp-go").addEventListener("click", spSearch);
-document.getElementById("sp-query").addEventListener("keydown", e => { if (e.key === "Enter") spSearch(); });
+async function handleYtUrl(url) {
+  // YouTube URL — present as a single saveable track row
+  renderTracks([{title: decodeURIComponent(url.split("v=")[1]?.split("&")[0] || "YouTube video"),
+                 artist: "", url, source: "yt", artwork_url: ""}]);
+  setHint("YouTube URL ready — hit Save to download.");
+}
 
-async function spSearch() {
-  const q = document.getElementById("sp-query").value.trim();
-  if (!q) return;
-  clearTracks();
+// ── Text search (parallel SC + Spotify) ───────────────────────────────────────
 
-  const isArtistUrl = q.includes("spotify.com/artist/");
-  const isPlaylistUrl = q.includes("spotify.com/playlist/");
+async function handleTextSearch(q) {
+  const [scUsers, scTracks, spArtists] = await Promise.all([
+    fetch(`/sc/search/users?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({})),
+    fetch(`/sc/search/tracks?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({})),
+    fetch(`/spotify/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({})),
+  ]);
 
-  if (isArtistUrl) {
-    const resp = await fetch("/spotify/artist", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({url: q})});
-    const data = await resp.json();
-    if (data.status === "ok") renderTracks(data.top_tracks || []);
-  } else if (isPlaylistUrl) {
-    const resp = await fetch("/spotify/playlist", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({url: q})});
-    const data = await resp.json();
-    if (data.status === "ok") renderTracks(data.tracks || []);
-  } else {
-    const resp = await fetch(`/spotify/search?q=${encodeURIComponent(q)}`);
-    const data = await resp.json();
-    renderSpArtists(data.artists || []);
+  if (scUsers.status === "connecting") {
+    setHint(`SoundCloud connecting… retrying in ${scUsers.retry_after || 30}s`);
+    setTimeout(() => handleTextSearch(q), (scUsers.retry_after || 30) * 1000);
+    return;
   }
+
+  // Merge artist/user lists: SC users first, then Spotify artists
+  const artists = [
+    ...(scUsers.users || []).map(u => ({...u, _source: "sc"})),
+    ...(spArtists.artists || []).map(a => ({
+      username: a.uri, full_name: a.name, avatar_url: a.artwork_url,
+      _source: "spotify", _uri: a.uri,
+    })),
+  ];
+  renderArtists(artists);
+  renderTracks((scTracks.tracks || []).map(t => ({...t, source: "sc"})));
 }
 
-function renderSpArtists(artists) {
-  const ul = document.getElementById("sp-artist-list");
+// ── Artist list ────────────────────────────────────────────────────────────────
+
+function renderArtists(artists) {
+  const ul = document.getElementById("result-users");
   ul.innerHTML = "";
   artists.forEach(a => {
     const li = document.createElement("li");
     li.className = "user-item";
-    li.innerHTML = `
-      <img src="${a.artwork_url || ""}" alt="" onerror="this.style.display='none'">
-      <span class="uname">${esc(a.name)}</span>
-    `;
+
+    const img = document.createElement("img");
+    img.src = a.avatar_url || "";
+    img.alt = "";
+    img.onerror = () => img.style.display = "none";
+
+    const name = document.createElement("span");
+    name.className = "uname";
+    name.textContent = a.full_name || a.username || a.name || "";
+
+    const badge = document.createElement("span");
+    badge.className = `source-badge ${a._source === "spotify" ? "sp" : "sc"}`;
+    badge.textContent = a._source === "spotify" ? "SP" : "SC";
+
+    li.appendChild(img);
+    li.appendChild(name);
+    li.appendChild(badge);
+
     li.addEventListener("click", async () => {
-      const resp = await fetch("/spotify/artist", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({uri: a.uri})});
-      const data = await resp.json();
-      if (data.status === "ok") renderTracks(data.top_tracks || []);
+      clearTracks();
+      setHint("Loading…");
+      if (a._source === "spotify") {
+        const resp = await fetch("/spotify/artist", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({uri: a._uri}),
+        });
+        const data = await resp.json();
+        if (data.status === "ok") renderTracks(data.top_tracks || []);
+      } else {
+        const url = `https://soundcloud.com/${a.username}`;
+        const resp = await fetch(`/sc/resolve?url=${encodeURIComponent(url)}`);
+        const data = await resp.json();
+        if (data.status === "ok") renderTracks(data.tracks || []);
+      }
+      setHint("");
     });
+
     ul.appendChild(li);
   });
 }
@@ -165,25 +194,52 @@ document.getElementById("import-parse").addEventListener("click", parseShare);
 async function parseShare() {
   const text = document.getElementById("import-paste").value.trim();
   if (!text) return;
-  const resp = await fetch("/share/parse", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({text})});
+  const resp = await fetch("/share/parse", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text}),
+  });
   const data = await resp.json();
   if (data.status === "ok") {
-    const tracksWithSource = (data.tracks || []).map(t => {
+    const tracks = (data.tracks || []).map(t => {
       const url = t.url || t.permalink_url || "";
       let source = t.source || "unknown";
       if (!t.source) {
         if (url.includes("soundcloud.com")) source = "sc";
-        else if (url.includes("youtube.com") || url.includes("youtu.be")) source = "yt";
+        else if (url.match(/youtube\.com|youtu\.be/)) source = "yt";
       }
       return {...t, source};
     });
-    renderTracks(tracksWithSource);
+    renderTracks(tracks);
   } else {
-    showError("import-track-list", data.error || "Parse error");
+    setHint(data.error || "Parse error");
   }
 }
 
-// ── Share (outgoing) ──────────────────────────────────────────────────────────
+// Pre-load import payload from URL fragment
+window.addEventListener("load", () => {
+  const hash = location.hash;
+  if (!hash.startsWith("#import:")) return;
+  const payload = hash.slice("#import:".length);
+  // Switch to Import tab
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelector('[data-tab="import"]').classList.add("active");
+  document.querySelectorAll(".tab-panel").forEach(p => p.style.display = "none");
+  document.getElementById("tab-import").style.display = "";
+  try {
+    const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const obj = JSON.parse(decoded);
+    if (obj.type === "track") {
+      document.getElementById("import-paste").value =
+        `http://${window.SERVER_HOSTNAME}:${window.SERVER_PORT}/share/import?v=1&d=${payload}`;
+      parseShare();
+    }
+  } catch (e) {
+    document.getElementById("import-paste").value = decodeURIComponent(payload);
+  }
+});
+
+// ── Share (outgoing) ───────────────────────────────────────────────────────────
 
 async function shareTrack(track) {
   const params = new URLSearchParams({
@@ -206,20 +262,22 @@ async function shareTrack(track) {
 async function shareAllTracks() {
   if (!allTracks.length) return;
   const name = document.getElementById("playlist-name").value.trim() || "Shared Playlist";
-  const body = { name, tracks: allTracks.map(t => ({
-    artist: t.artist || "", title: t.title || "",
-    url: t.permalink_url || t.url || ""
-  }))};
+  const body = {
+    name,
+    tracks: allTracks.map(t => ({
+      artist: t.artist || "",
+      title: t.title || "",
+      url: t.permalink_url || t.url || "",
+    })),
+  };
   try {
     const resp = await fetch("/share/code", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
     const data = await resp.json();
-    if (data.text) {
-      showShareModal(data.text);
-    }
+    if (data.text) showShareModal(data.text);
   } catch (e) {
     showToast("Could not generate share code");
   }
@@ -230,13 +288,13 @@ function showToast(msg) {
   if (!toast) {
     toast = document.createElement("div");
     toast.id = "share-toast";
-    toast.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;z-index:9999;font-size:14px;opacity:0;transition:opacity .2s";
+    toast.style.cssText = "position:fixed;bottom:96px;left:50%;transform:translateX(-50%);background:#2C2A35;color:#fff;padding:10px 20px;border-radius:8px;z-index:9999;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none";
     document.body.appendChild(toast);
   }
   toast.textContent = msg;
   toast.style.opacity = "1";
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { toast.style.opacity = "0"; }, 2000);
+  toast._t = setTimeout(() => { toast.style.opacity = "0"; }, 2200);
 }
 
 function showShareModal(text) {
@@ -247,10 +305,16 @@ function showShareModal(text) {
     modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999";
     modal.innerHTML = `
       <div style="background:#fff;border-radius:12px;padding:24px;max-width:480px;width:90%;position:relative">
-        <button onclick="document.getElementById('share-modal').remove()" style="position:absolute;top:12px;right:16px;background:none;border:none;font-size:18px;cursor:pointer">✕</button>
-        <h3 style="margin:0 0 12px">Share Playlist</h3>
-        <textarea id="share-modal-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;resize:vertical" readonly></textarea>
-        <button onclick="navigator.clipboard.writeText(document.getElementById('share-modal-text').value).then(()=>showToast('Copied!'))" style="margin-top:12px;padding:8px 20px;background:#967BB6;color:#fff;border:none;border-radius:6px;cursor:pointer">Copy All</button>
+        <button onclick="document.getElementById('share-modal').remove()"
+                style="position:absolute;top:12px;right:16px;background:none;border:none;font-size:18px;cursor:pointer">✕</button>
+        <h3 style="margin:0 0 12px;color:#6B5B9E">Share Playlist</h3>
+        <textarea id="share-modal-text" rows="10"
+                  style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;resize:vertical;border:1px solid #ccc;border-radius:6px;padding:8px"
+                  readonly></textarea>
+        <button onclick="navigator.clipboard.writeText(document.getElementById('share-modal-text').value).then(()=>showToast('Copied!'))"
+                style="margin-top:12px;padding:8px 20px;background:#967BB6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">
+          Copy All
+        </button>
       </div>`;
     document.body.appendChild(modal);
   }
@@ -258,42 +322,13 @@ function showShareModal(text) {
   document.getElementById("share-modal").style.display = "flex";
 }
 
-// Pre-load import payload from URL fragment
-window.addEventListener("load", () => {
-  const hash = location.hash;
-  if (hash.startsWith("#import:")) {
-    const payload = hash.slice("#import:".length);
-    // Switch to Import tab
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    document.querySelector('[data-tab="import"]').classList.add("active");
-    document.querySelectorAll(".tab-panel").forEach(p => p.style.display = "none");
-    document.getElementById("tab-import").style.display = "";
-    // Decode and fill textarea
-    try {
-      const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-      const obj = JSON.parse(decoded);
-      if (obj.type === "track") {
-        const text = `/share/import?v=1&d=${payload}`;
-        document.getElementById("import-paste").value = text;
-        parseShare();
-      }
-    } catch (e) {
-      document.getElementById("import-paste").value = decodeURIComponent(payload);
-    }
-  }
-});
-
 // ── Track rendering ────────────────────────────────────────────────────────────
 
 function clearTracks() {
   allTracks = [];
   selectedIds.clear();
   document.getElementById("main-track-list").innerHTML = "";
-  document.getElementById("sc-user-list").innerHTML = "";
-  document.getElementById("sc-track-list").innerHTML = "";
-  document.getElementById("sp-artist-list").innerHTML = "";
-  document.getElementById("sp-track-list").innerHTML = "";
-  document.getElementById("sc-subtabs").style.display = "none";
+  document.getElementById("result-users").innerHTML = "";
   updateSelectedCount();
 }
 
@@ -313,10 +348,10 @@ function makeTrackRow(track, idx) {
 
   const isSpotify = track.source === "spotify";
   const isYt = !isSpotify && track.source !== "sc" &&
-    (track.url || "").match(/youtube\.com|youtu\.be/);
-  const duration = track.duration_ms ? formatDuration(track.duration_ms) : "";
+    !!(track.url || "").match(/youtube\.com|youtu\.be/);
   const sourceLabel = isSpotify ? "SP" : (track.source === "sc" ? "SC" : (isYt ? "YT" : "?"));
   const sourceClass = isSpotify ? "sp" : (track.source === "sc" ? "sc" : (isYt ? "yt" : ""));
+  const duration = track.duration_ms ? formatDuration(track.duration_ms) : "";
 
   // Checkbox
   const cb = document.createElement("input");
@@ -334,7 +369,7 @@ function makeTrackRow(track, idx) {
   img.alt = "";
   img.onerror = () => { img.style.display = "none"; };
 
-  // Info block: title + meta row (artist · badge · duration · status)
+  // Info: title + meta row
   const info = document.createElement("div");
   info.className = "info";
 
@@ -353,17 +388,18 @@ function makeTrackRow(track, idx) {
   badge.className = `source-badge ${sourceClass}`;
   badge.textContent = sourceLabel;
 
-  const dur = document.createElement("span");
-  dur.className = "duration";
-  dur.textContent = duration;
-
   const statusIcon = document.createElement("span");
   statusIcon.className = "status-icon";
   statusIcon.id = `status-${idx}`;
 
   meta.appendChild(artistEl);
   meta.appendChild(badge);
-  if (duration) meta.appendChild(dur);
+  if (duration) {
+    const dur = document.createElement("span");
+    dur.className = "duration";
+    dur.textContent = duration;
+    meta.appendChild(dur);
+  }
   meta.appendChild(statusIcon);
 
   info.appendChild(titleEl);
@@ -424,7 +460,8 @@ async function playPreview(track, btn) {
       const player = document.getElementById("player");
       player.src = data.stream_url;
       player.play();
-      document.getElementById("player-label").textContent = `${track.artist} — ${track.title}`;
+      document.getElementById("player-label").textContent =
+        `${track.artist} — ${track.title}`;
       btn.textContent = "▶";
       btn.disabled = false;
     } else {
@@ -466,7 +503,7 @@ async function startImport(tracks, batchMode = false) {
   const resp = await fetch("/import/tracks", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({tracks, playlist_name: name, batch_size: 50}),
+    body: JSON.stringify({tracks, playlist_name: name}),
   });
   const data = await resp.json();
   if (data.job_id) {
@@ -483,39 +520,38 @@ async function pollImportStatus(batchMode) {
   if (data.status !== "ok") return;
 
   (data.tracks || []).forEach((t, i) => {
-    const statusEl = document.getElementById(`status-${i}`);
-    if (!statusEl) return;
-    const icons = {queued: "⏳", downloading: "⬇", done: "✓", error: "✗"};
-    statusEl.textContent = icons[t.status] || "";
+    const el = document.getElementById(`status-${i}`);
+    if (!el) return;
+    el.textContent = {queued: "⏳", downloading: "⬇", done: "✓", error: "✗"}[t.status] || "";
   });
 
   if (data.done + data.errors >= data.total) {
     clearInterval(pollInterval);
     pollInterval = null;
-    if (batchMode && saveAllOffset < saveAllTotal) {
-      sendNextBatch();
-    }
+    if (batchMode && saveAllOffset < saveAllTotal) sendNextBatch();
   }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+function setHint(msg) {
+  const el = document.getElementById("search-hint");
+  if (el) el.textContent = msg;
+}
 
 function updateSelectedCount() {
   document.getElementById("selected-count").textContent = `${selectedIds.size} selected`;
 }
 
 function esc(str) {
-  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function formatDuration(ms) {
   const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${String(sec).padStart(2, "0")}`;
-}
-
-function showError(listId, msg) {
-  const el = document.getElementById(listId);
-  if (el) el.innerHTML = `<li style="color:#c00;padding:0.5rem">${esc(msg)}</li>`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }

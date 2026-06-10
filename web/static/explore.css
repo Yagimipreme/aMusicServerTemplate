@@ -60,21 +60,14 @@ header h1 {
 
 .tab-panel { padding: 0.75rem 0; }
 
-/* ── Sub-tabs ────────────────────────────────────────────────────────────── */
+/* ── Search hint ─────────────────────────────────────────────────────────── */
 
-.sc-subtabs { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
-
-.subtab-btn {
-  padding: 0.3rem 0.75rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: #f9f7fc;
-  cursor: pointer;
+.search-hint {
+  min-height: 1.2rem;
   font-size: 0.82rem;
-  transition: background 0.15s;
+  color: #888;
+  margin-bottom: 0.5rem;
 }
-
-.subtab-btn.active { background: #967BB6; color: #fff; border-color: #967BB6; }
 
 /* ── Search bar ──────────────────────────────────────────────────────────── */
 
