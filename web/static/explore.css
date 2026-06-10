@@ -1,5 +1,5 @@
-/* explore.css — aMusicServer Explore UI
-   Color palette: lavender #967BB6, cream #FFFDF9, dark #2C2A35, accent #6B5B9E */
+/* explore.css — aMusicServer Explore UI (mobile-first)
+   Palette: lavender #967BB6, deep #6B5B9E, cream #FFFDF9, dark #2C2A35 */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -10,156 +10,385 @@ body {
   min-height: 100vh;
 }
 
-#app { max-width: 960px; margin: 0 auto; padding: 0 1rem 8rem; }
+#app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 0.75rem;
+  /* room for player bar (~52px) + save bar (~80px mobile, ~52px desktop) */
+  padding-bottom: 144px;
+}
 
-header { padding: 1.5rem 0 0.5rem; border-bottom: 2px solid #967BB6; margin-bottom: 1rem; }
-header h1 { font-size: 1.6rem; color: #6B5B9E; letter-spacing: 0.05em; }
+/* ── Header ──────────────────────────────────────────────────────────────── */
 
-/* Tabs */
-.tabs { display: flex; gap: 0.25rem; margin-top: 0.75rem; }
+header {
+  padding: 1rem 0 0;
+  border-bottom: 2px solid #967BB6;
+  margin-bottom: 0.75rem;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  color: #6B5B9E;
+  letter-spacing: 0.04em;
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 0.2rem;
+  margin-top: 0.6rem;
+}
+
 .tab-btn {
-  padding: 0.45rem 1.1rem;
+  flex: 1;
+  padding: 0.45rem 0.5rem;
   border: 1px solid #967BB6;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
   background: #f0eaf7;
   color: #6B5B9E;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   transition: background 0.15s;
+  white-space: nowrap;
+  text-align: center;
 }
-.tab-btn.active, .tab-btn:hover { background: #967BB6; color: #fff; }
 
-.tab-panel { padding: 1rem 0; }
+.tab-btn.active,
+.tab-btn:hover { background: #967BB6; color: #fff; }
 
-/* Sub-tabs */
-.sc-subtabs { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+.tab-panel { padding: 0.75rem 0; }
+
+/* ── Sub-tabs ────────────────────────────────────────────────────────────── */
+
+.sc-subtabs { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
+
 .subtab-btn {
-  padding: 0.3rem 0.85rem;
+  padding: 0.3rem 0.75rem;
   border: 1px solid #ccc;
   border-radius: 4px;
   background: #f9f7fc;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  transition: background 0.15s;
 }
+
 .subtab-btn.active { background: #967BB6; color: #fff; border-color: #967BB6; }
 
-/* Search bar */
-.search-bar { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+/* ── Search bar ──────────────────────────────────────────────────────────── */
+
+.search-bar { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; }
+
 .search-bar input {
   flex: 1;
-  padding: 0.6rem 0.85rem;
+  padding: 0.6rem 0.8rem;
   border: 1px solid #ccc;
   border-radius: 6px;
   font-size: 0.95rem;
   background: #fff;
+  min-width: 0;
 }
-.search-bar button, #import-parse {
-  padding: 0.6rem 1.4rem;
+
+.search-bar button,
+#import-parse {
+  padding: 0.6rem 1.1rem;
   background: #967BB6;
   color: #fff;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
   transition: background 0.15s;
 }
-.search-bar button:hover, #import-parse:hover { background: #6B5B9E; }
 
-/* Import textarea */
+.search-bar button:hover,
+#import-parse:hover { background: #6B5B9E; }
+
+/* ── Import textarea ─────────────────────────────────────────────────────── */
+
 #import-paste {
   width: 100%;
-  padding: 0.7rem;
+  padding: 0.65rem 0.75rem;
   border: 1px solid #ccc;
   border-radius: 6px;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   margin-bottom: 0.5rem;
   resize: vertical;
+  background: #fff;
 }
 
-/* User list */
-.user-list { list-style: none; display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+/* ── User / artist list ──────────────────────────────────────────────────── */
+
+.user-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
 .user-item {
-  display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.5rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.75rem;
   border: 1px solid #ddd;
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s;
+  max-width: 100%;
 }
-.user-item:hover { background: #f0eaf7; border-color: #967BB6; }
-.user-item img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
-.user-item .uname { font-weight: 600; font-size: 0.9rem; }
 
-/* Track list */
+.user-item:hover { background: #f0eaf7; border-color: #967BB6; }
+.user-item img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.user-item .uname { font-weight: 600; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Track list ──────────────────────────────────────────────────────────── */
+
 .track-list { list-style: none; }
+
 .track-item {
-  display: grid;
-  grid-template-columns: 24px 48px 1fr 60px 70px 56px 44px;
+  display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.4rem 0.5rem;
+  gap: 0.5rem;
+  padding: 0.45rem 0.3rem;
   border-bottom: 1px solid #eee;
   transition: background 0.1s;
 }
+
 .track-item:hover { background: #f9f7fc; }
-.track-item input[type="checkbox"] { cursor: pointer; }
-.track-item .cover { width: 44px; height: 44px; border-radius: 4px; object-fit: cover; background: #ddd; }
-.track-item .info { overflow: hidden; }
-.track-item .artist { font-size: 0.78rem; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.track-item .title { font-size: 0.9rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.source-badge {
-  display: inline-block; padding: 0.15rem 0.45rem;
-  border-radius: 4px; font-size: 0.72rem; font-weight: 700;
-  background: #e8e0f5; color: #6B5B9E;
+
+.track-item input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #967BB6;
 }
+
+.track-item .cover {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #e8e0f5;
+}
+
+/* Info block: title on top, meta row below */
+.track-item .info {
+  flex: 1;
+  min-width: 0;
+}
+
+.track-item .title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-item .meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.track-item .artist {
+  font-size: 0.76rem;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.track-item .duration {
+  font-size: 0.74rem;
+  color: #999;
+  white-space: nowrap;
+}
+
+/* Source badge */
+.source-badge {
+  display: inline-block;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: #e8e0f5;
+  color: #6B5B9E;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
 .source-badge.sc { background: #ffe0b2; color: #b45309; }
 .source-badge.sp { background: #d1fae5; color: #065f46; }
-.track-item .duration { font-size: 0.82rem; color: #666; text-align: right; }
+.source-badge.yt { background: #fee2e2; color: #b91c1c; }
+
+/* Status icon */
+.status-icon { font-size: 0.9rem; flex-shrink: 0; }
+
+/* Actions group: preview + share */
+.track-item .actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
 .preview-btn {
-  padding: 0.3rem 0.6rem;
+  padding: 0.3rem 0.55rem;
   border: 1px solid #967BB6;
   border-radius: 4px;
   background: #fff;
   color: #6B5B9E;
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  transition: background 0.15s;
 }
-.preview-btn:hover { background: #967BB6; color: #fff; }
-.preview-btn:disabled { opacity: 0.4; cursor: default; border-color: #ccc; color: #ccc; }
-.no-preview { color: #bbb; font-size: 0.85rem; text-align: center; }
-.status-icon { font-size: 1rem; min-width: 20px; text-align: center; }
 
-/* Player bar */
+.preview-btn:hover { background: #967BB6; color: #fff; }
+.preview-btn:disabled { opacity: 0.35; cursor: default; border-color: #ccc; color: #ccc; }
+
+.no-preview { color: #ccc; font-size: 0.82rem; padding: 0 0.3rem; }
+
+.share-btn {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #c4b0de;
+  border-radius: 4px;
+  background: #f5f0fb;
+  color: #6B5B9E;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  transition: background 0.15s;
+}
+
+.share-btn:hover { background: #967BB6; color: #fff; border-color: #967BB6; }
+
+/* ── Player bar ──────────────────────────────────────────────────────────── */
+
 #player-bar {
-  position: fixed; bottom: 56px; left: 0; right: 0;
+  position: fixed;
+  bottom: 82px;   /* sits above the 2-row mobile save bar */
+  left: 0; right: 0;
   background: #2C2A35;
   color: #fff;
-  padding: 0.5rem 1rem;
-  display: flex; align-items: center; gap: 1rem;
+  padding: 0.4rem 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   z-index: 100;
 }
-#player { flex: 1; height: 36px; accent-color: #967BB6; }
-#player-label { font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
 
-/* Save bar */
+#player { flex: 1; height: 32px; accent-color: #967BB6; min-width: 0; }
+
+#player-label {
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+  flex-shrink: 0;
+}
+
+/* ── Save bar ────────────────────────────────────────────────────────────── */
+
 #save-bar {
-  position: fixed; bottom: 0; left: 0; right: 0;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
   background: #f0eaf7;
-  border-top: 1px solid #967BB6;
-  padding: 0.5rem 1rem;
-  display: flex; align-items: center; gap: 0.75rem;
+  border-top: 2px solid #967BB6;
+  padding: 0.4rem 0.75rem 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
   z-index: 101;
 }
-#selected-count { font-size: 0.88rem; color: #6B5B9E; min-width: 80px; }
+
+#selected-count {
+  font-size: 0.8rem;
+  color: #6B5B9E;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
 #playlist-name {
-  flex: 1; padding: 0.4rem 0.7rem;
-  border: 1px solid #ccc; border-radius: 5px; font-size: 0.9rem;
+  flex: 1;
+  min-width: 100px;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #c4b0de;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  background: #fff;
 }
-#save-selected, #save-all {
-  padding: 0.4rem 1rem;
-  background: #967BB6; color: #fff;
-  border: none; border-radius: 5px;
-  cursor: pointer; font-size: 0.88rem;
+
+/* Buttons group wraps together as a unit on its own row on mobile */
+.save-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
 }
-#save-selected:hover, #save-all:hover { background: #6B5B9E; }
+
+#save-selected,
+#save-all {
+  padding: 0.38rem 0.85rem;
+  background: #967BB6;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+#save-selected:hover,
+#save-all:hover { background: #6B5B9E; }
+
+#share-playlist-btn {
+  padding: 0.38rem 0.85rem;
+  background: #f5f0fb;
+  color: #6B5B9E;
+  border: 1px solid #c4b0de;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+#share-playlist-btn:hover { background: #967BB6; color: #fff; border-color: #967BB6; }
+
+/* ── Desktop overrides (640px+) ──────────────────────────────────────────── */
+
+@media (min-width: 640px) {
+  #app { padding: 0 1rem; padding-bottom: 112px; }
+
+  header h1 { font-size: 1.6rem; }
+
+  .tab-btn { flex: none; padding: 0.45rem 1.1rem; font-size: 0.9rem; }
+
+  .track-item { gap: 0.65rem; padding: 0.45rem 0.4rem; }
+  .track-item .cover { width: 46px; height: 46px; }
+  .track-item .artist { max-width: 200px; }
+  .track-item .title { font-size: 0.92rem; }
+
+  /* On desktop the save bar fits in a single row */
+  #save-bar { flex-wrap: nowrap; padding: 0.45rem 1rem; }
+  #playlist-name { min-width: 160px; }
+  #selected-count { min-width: 80px; }
+
+  #player-bar { bottom: 52px; }
+  #app { padding-bottom: 112px; }
+
+  #player-label { max-width: 280px; }
+}

@@ -205,7 +205,7 @@ async function shareTrack(track) {
 
 async function shareAllTracks() {
   if (!allTracks.length) return;
-  const name = document.title || "Shared Playlist";
+  const name = document.getElementById("playlist-name").value.trim() || "Shared Playlist";
   const body = { name, tracks: allTracks.map(t => ({
     artist: t.artist || "", title: t.title || "",
     url: t.permalink_url || t.url || ""
@@ -312,10 +312,13 @@ function makeTrackRow(track, idx) {
   li.dataset.idx = idx;
 
   const isSpotify = track.source === "spotify";
-  const duration = track.duration_ms ? formatDuration(track.duration_ms) : "—";
-  const sourceLabel = isSpotify ? "SP" : (track.source === "sc" ? "SC" : "?");
-  const sourceClass = isSpotify ? "sp" : (track.source === "sc" ? "sc" : "");
+  const isYt = !isSpotify && track.source !== "sc" &&
+    (track.url || "").match(/youtube\.com|youtu\.be/);
+  const duration = track.duration_ms ? formatDuration(track.duration_ms) : "";
+  const sourceLabel = isSpotify ? "SP" : (track.source === "sc" ? "SC" : (isYt ? "YT" : "?"));
+  const sourceClass = isSpotify ? "sp" : (track.source === "sc" ? "sc" : (isYt ? "yt" : ""));
 
+  // Checkbox
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.addEventListener("change", () => {
@@ -324,15 +327,27 @@ function makeTrackRow(track, idx) {
     updateSelectedCount();
   });
 
+  // Cover art
   const img = document.createElement("img");
   img.className = "cover";
   img.src = track.artwork_url || "";
   img.alt = "";
   img.onerror = () => { img.style.display = "none"; };
 
+  // Info block: title + meta row (artist · badge · duration · status)
   const info = document.createElement("div");
   info.className = "info";
-  info.innerHTML = `<div class="artist">${esc(track.artist || "")}</div><div class="title">${esc(track.title || "")}</div>`;
+
+  const titleEl = document.createElement("div");
+  titleEl.className = "title";
+  titleEl.textContent = track.title || "";
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+
+  const artistEl = document.createElement("span");
+  artistEl.className = "artist";
+  artistEl.textContent = track.artist || "";
 
   const badge = document.createElement("span");
   badge.className = `source-badge ${sourceClass}`;
@@ -346,6 +361,18 @@ function makeTrackRow(track, idx) {
   statusIcon.className = "status-icon";
   statusIcon.id = `status-${idx}`;
 
+  meta.appendChild(artistEl);
+  meta.appendChild(badge);
+  if (duration) meta.appendChild(dur);
+  meta.appendChild(statusIcon);
+
+  info.appendChild(titleEl);
+  info.appendChild(meta);
+
+  // Actions: preview + share
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
   let previewEl;
   if (isSpotify) {
     previewEl = document.createElement("span");
@@ -355,7 +382,7 @@ function makeTrackRow(track, idx) {
     previewEl = document.createElement("button");
     previewEl.className = "preview-btn";
     previewEl.textContent = "▶";
-    previewEl.addEventListener("click", () => playPreview(track, previewEl));
+    previewEl.addEventListener("click", e => { e.stopPropagation(); playPreview(track, previewEl); });
   }
 
   const shareBtn = document.createElement("button");
@@ -364,14 +391,13 @@ function makeTrackRow(track, idx) {
   shareBtn.textContent = "⬆";
   shareBtn.addEventListener("click", e => { e.stopPropagation(); shareTrack(track); });
 
+  actions.appendChild(previewEl);
+  actions.appendChild(shareBtn);
+
   li.appendChild(cb);
   li.appendChild(img);
   li.appendChild(info);
-  li.appendChild(badge);
-  li.appendChild(dur);
-  li.appendChild(previewEl);
-  li.appendChild(statusIcon);
-  li.appendChild(shareBtn);
+  li.appendChild(actions);
 
   return li;
 }
