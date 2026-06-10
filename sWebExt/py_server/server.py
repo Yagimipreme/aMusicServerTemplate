@@ -101,6 +101,48 @@ def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
         time.sleep(period_seconds)
 
 
+# ── Dedup scheduler ────────────────────────────────────────────────────────────
+
+_dedup_running = threading.Lock()
+
+
+def _run_dedup_once(force_dry_run=False):
+    """Run one dedup scan. Returns report dict."""
+    if not _dedup_running.acquire(blocking=False):
+        logger.warning("[DEDUP] Scan already running — skipping")
+        return {"status": "skipped", "reason": "already running"}
+    try:
+        if _PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, _PROJECT_ROOT)
+        from library.dedupe import run as dedup_run
+        from discover.config import load_config
+        cfg = load_config(_CONFIG_PATH)
+        song_dir = cfg.get("song_dir", "")
+        if not song_dir:
+            logger.warning("[DEDUP] song_dir not configured")
+            return {"status": "disabled", "reason": "song_dir not set"}
+        auto_delete = False if force_dry_run else cfg.get("dedup", {}).get("auto_delete", False)
+        result = dedup_run(song_dir, auto_delete=auto_delete)
+        logger.info("[DEDUP] Scan complete: %s", result)
+        return {"status": "ok", **result}
+    except Exception as e:
+        logger.exception("[DEDUP] Scan failed")
+        return {"status": "error", "error": str(e)}
+    finally:
+        _dedup_running.release()
+
+
+def _dedup_scheduled_loop():
+    """Sleep interval_hours then run dedup; re-reads config each cycle."""
+    from discover.config import load_config
+    while True:
+        cfg = load_config(_CONFIG_PATH)
+        interval_hours = cfg.get("dedup", {}).get("interval_hours", 24)
+        time.sleep(interval_hours * 3600)
+        logger.info("[DEDUP] Starting scheduled scan")
+        _run_dedup_once()
+
+
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -122,6 +164,20 @@ class SimpleHandler(BaseHTTPRequestHandler):
         if self.path.rstrip('/') == '/discover/run':
             result = _run_discover_once()
             code = 200 if result.get("status") in ("ok", "disabled") else 500
+            self._set_headers(code)
+            self.wfile.write(json.dumps(result).encode())
+            return
+
+        if self.path.rstrip('/') == '/library/dedup/run':
+            result = _run_dedup_once(force_dry_run=False)
+            code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
+            self._set_headers(code)
+            self.wfile.write(json.dumps(result).encode())
+            return
+
+        if self.path.rstrip('/') == '/library/dedup/report':
+            result = _run_dedup_once(force_dry_run=True)
+            code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
             self._set_headers(code)
             self.wfile.write(json.dumps(result).encode())
             return
@@ -344,6 +400,17 @@ def start_background_server(port=5000):
     t_disc = threading.Thread(target=_discover_weekly_loop, daemon=True)
     t_disc.start()
     logger.info('Started background discover weekly thread')
+
+    _cfg_at_start = {}
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as _f:
+            _cfg_at_start = json.load(_f)
+    except Exception:
+        pass
+    if _cfg_at_start.get("dedup", {}).get("enabled"):
+        t_dedup = threading.Thread(target=_dedup_scheduled_loop, daemon=True)
+        t_dedup.start()
+        logger.info("Started background dedup scheduler thread")
 
     httpd = HTTPServer(('0.0.0.0', port), SimpleHandler)
     try:
