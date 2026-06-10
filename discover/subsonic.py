@@ -46,6 +46,23 @@ class Subsonic:
             out.append({"id": aid, "name": name})
         return out
 
+    def find_artist_id(self, name: str) -> str | None:
+        """Search Navidrome for an artist by name and return their ID, or None."""
+        try:
+            sr = self._call("search3.view", query=name, songCount=0, albumCount=0, artistCount=5)
+            hits = (sr.get("searchResult3", {}) or {}).get("artist", []) or []
+            name_cf = name.casefold()
+            for hit in hits:
+                if (hit.get("name") or "").casefold() == name_cf:
+                    return hit.get("id")
+            # Accept partial match as fallback (name contains the query as prefix)
+            for hit in hits:
+                if (hit.get("name") or "").casefold().startswith(name_cf):
+                    return hit.get("id")
+        except Exception:
+            pass
+        return None
+
     def get_artist_info2(self, artist_id: str, count: int = 20):
         """Similar artists (includes not-owned, id == '-1')."""
         sr = self._call("getArtistInfo2.view", id=artist_id,

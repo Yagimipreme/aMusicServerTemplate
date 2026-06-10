@@ -12,21 +12,24 @@ from discover.engine import lastfm_is_ready
 class TestGetBootstrapSeeds(unittest.TestCase):
     def _make_subsonic(self, artists):
         sub = MagicMock()
-        sub.get_frequent_artists.return_value = [{"name": a} for a in artists]
+        sub.get_frequent_artists.return_value = [{"name": a, "id": f"id_{a}"} for a in artists]
         return sub
+
+    def _names(self, seeds):
+        return [s["name"] for s in seeds]
 
     def test_manual_seeds_first(self):
         cfg = {"discover": {"manual_seeds": ["Aphex Twin", "Burial"]}}
         sub = self._make_subsonic(["Boards of Canada"])
         seeds = get_bootstrap_seeds(cfg, sub)
-        self.assertEqual(seeds[0], "Aphex Twin")
-        self.assertEqual(seeds[1], "Burial")
+        self.assertEqual(self._names(seeds)[0], "Aphex Twin")
+        self.assertEqual(self._names(seeds)[1], "Burial")
 
     def test_deduplicates(self):
         cfg = {"discover": {"manual_seeds": ["Burial"]}}
         sub = self._make_subsonic(["Burial", "Aphex Twin"])
         seeds = get_bootstrap_seeds(cfg, sub)
-        self.assertEqual(seeds.count("Burial"), 1)
+        self.assertEqual(self._names(seeds).count("Burial"), 1)
 
     def test_caps_at_20(self):
         cfg = {"discover": {"manual_seeds": [f"Artist {i}" for i in range(30)]}}

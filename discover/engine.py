@@ -45,13 +45,13 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
 
     m3u = None
     if acquired_paths:
-        deps.state.save()
         m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
         try:
             deps.subsonic.start_scan()
         except Exception:
             logger.exception("discover: scan trigger failed")
 
+    deps.state.save(stamp_last_run=True)
     return {"acquired": len(acquired_paths), "m3u": m3u}
 
 
@@ -128,6 +128,7 @@ def run_mix(deps, cfg):
         logger.info("discover: bootstrap seeds: %d", len(seeds))
         if not seeds:
             logger.warning("discover: no bootstrap seeds available")
+            deps.state.save(stamp_last_run=True)
             return {"acquired": 0, "m3u": None}
         # reuse the existing expansion/acquire pipeline
         artists = expand_similar(deps.subsonic, seeds, per_seed=20)
@@ -145,12 +146,12 @@ def run_mix(deps, cfg):
             deps.state.add(track_key(c["artist"], c["title"]))
         m3u = None
         if acquired_paths:
-            deps.state.save()
             m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
             try:
                 deps.subsonic.start_scan()
             except Exception:
                 logger.exception("discover: scan trigger failed")
+        deps.state.save(stamp_last_run=True)
         return {"acquired": len(acquired_paths), "m3u": m3u}
 
 

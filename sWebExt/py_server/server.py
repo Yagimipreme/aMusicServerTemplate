@@ -93,6 +93,15 @@ def _build_discover_deps():
     spec.loader.exec_module(dl_mod)
     song_dir = dl_mod.get_config_song_dir()
 
+    lastfm_client = None
+    lfm_key = cfg.get("lastfm_api_key", "")
+    if lfm_key:
+        try:
+            from lastfm.client import LastFMClient
+            lastfm_client = LastFMClient(lfm_key)
+        except Exception:
+            logger.warning("[DISCOVER] Last.fm client init failed", exc_info=True)
+
     state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
     return SimpleNamespace(
         subsonic=Subsonic(host, user, pw),
@@ -100,6 +109,7 @@ def _build_discover_deps():
         download_fn=make_download_fn(lambda url: dl_mod.download_url(url, song_dir)),
         state=load_state(state_path),
         song_dir=song_dir,
+        lastfm_client=lastfm_client,
     )
 
 
@@ -108,17 +118,14 @@ def _run_discover_once():
         deps = _build_discover_deps()
         if deps is None:
             return {"status": "disabled", "reason": "navidrome creds missing"}
-        from discover.engine import run_weekly
+        from discover.engine import run_mix
         cfg = {}
         try:
             with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
         except Exception:
             pass
-        disc = cfg.get("discover") or {}
-        count = disc.get("weekly_count", 30)
-        playlist_name = disc.get("playlist_name", "Weekly Mix")
-        result = run_weekly(deps, count=count, playlist_name=playlist_name)
+        result = run_mix(deps, cfg)
         logger.info("[DISCOVER] run complete: %s", result)
         return {"status": "ok", **result}
     except Exception as e:
@@ -173,16 +180,20 @@ def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
             logger.warning("[DISCOVER] initial-run check failed", exc_info=True)
 
     while True:
-        cfg = _get_config()
-        disc = cfg.get("discover") or {}
-        schedule = disc.get("schedule", "weekly")
-        run_day = disc.get("run_day", "sunday")
-        run_hour = disc.get("run_hour", 22)
-        sleep_secs = _seconds_until_next_run(schedule, run_day, run_hour)
-        logger.info("[DISCOVER] next run in %.0f seconds (%s %s @%d:00)", sleep_secs, schedule, run_day, run_hour)
-        time.sleep(sleep_secs)
-        logger.info("[DISCOVER] scheduled cycle starting")
-        _run_discover_once()
+        try:
+            cfg = _get_config()
+            disc = cfg.get("discover") or {}
+            schedule = disc.get("schedule", "weekly")
+            run_day = disc.get("run_day", "sunday")
+            run_hour = disc.get("run_hour", 22)
+            sleep_secs = _seconds_until_next_run(schedule, run_day, run_hour)
+            logger.info("[DISCOVER] next run in %.0f seconds (%s %s @%d:00)", sleep_secs, schedule, run_day, run_hour)
+            time.sleep(sleep_secs)
+            logger.info("[DISCOVER] scheduled cycle starting")
+            _run_discover_once()
+        except Exception:
+            logger.exception("[DISCOVER] loop iteration failed; retrying in 3600s")
+            time.sleep(3600)
 
 
 def _run_playlist_mix(playlist_id: str, count: int) -> dict:
@@ -363,6 +374,50 @@ def _dedup_scheduled_loop():
         _run_dedup_once()
 
 
+def _fetch_sc_client_id_via_scrape() -> str | None:
+    """Scrape a fresh SoundCloud client_id from soundcloud.com JS bundles."""
+    import re as _re
+    import requests as _req
+    import urllib3 as _urllib3
+    _urllib3.disable_warnings(_urllib3.exceptions.InsecureRequestWarning)
+    kw = {"headers": {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+          "timeout": 15, "verify": False}
+    try:
+        page = _req.get("https://soundcloud.com/", **kw).text
+        # Only fetch SC CDN scripts (skip third-party domains)
+        scripts = [u for u in _re.findall(r'<script[^>]+src="(https://[^"]+\.js)"', page)
+                   if "sndcdn.com" in u or "soundcloud.com" in u]
+        _PATS = [r'client_id[:=]["\']([0-9a-zA-Z]{32})["\']',
+                 r'client_id=([0-9a-zA-Z]{32})',
+                 r'"client_id","([0-9a-zA-Z]{32})"']
+        for url in scripts:
+            try:
+                js = _req.get(url, **{**kw, "timeout": 15}).text
+                for pat in _PATS:
+                    m = _re.search(pat, js)
+                    if m:
+                        cid = m.group(1)
+                        logger.info("[SC-REFRESH] Got client_id via JS scrape: %s…", cid[:12])
+                        return cid
+            except Exception:
+                continue
+    except Exception:
+        logger.exception("[SC-REFRESH] JS scrape failed")
+    return None
+
+
+def _persist_sc_client_id(cid: str) -> None:
+    cfg = {}
+    if os.path.exists(_CONFIG_PATH):
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    cfg["sc_client_id"] = cid
+    cfg["sc_client_id_ts"] = int(time.time())
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    logger.info("[SC-REFRESH] Persisted sc_client_id")
+
+
 def _refresh_sc_client_id_loop(period_seconds=3600):
     global _sc_client_ready
     script_fp = os.path.join(_PROJECT_ROOT, "scripts/Sc2Sp_src/script_web.py")
@@ -370,7 +425,9 @@ def _refresh_sc_client_id_loop(period_seconds=3600):
     while True:
         cycle += 1
         _sc_client_ready = False
+        cid = None
         try:
+            # Primary: Selenium scrape via sc2 helper script
             if os.path.exists(script_fp):
                 spec   = importlib.util.spec_from_file_location("sc2_web_helper", script_fp)
                 module = importlib.util.module_from_spec(spec)
@@ -383,23 +440,22 @@ def _refresh_sc_client_id_loop(period_seconds=3600):
                 if module and hasattr(module, "fetch_client_id_via_selenium"):
                     try:
                         cid = module.fetch_client_id_via_selenium()
-                        if cid:
-                            cfg = {}
-                            if os.path.exists(_CONFIG_PATH):
-                                with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-                                    cfg = json.load(f)
-                            cfg["sc_client_id"] = cid
-                            cfg["sc_client_id_ts"] = int(time.time())
-                            with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-                                json.dump(cfg, f, ensure_ascii=False, indent=2)
-                            logger.info("[SC-REFRESH] Persisted sc_client_id")
-                            _sc_client_ready = True
                     except Exception:
                         logger.exception("[SC-REFRESH] fetch_client_id_via_selenium raised")
+
+            # Fallback: scrape client_id directly from soundcloud.com JS bundles
+            if not cid:
+                logger.info("[SC-REFRESH] Selenium unavailable — trying JS scrape fallback")
+                cid = _fetch_sc_client_id_via_scrape()
+
+            if cid:
+                _persist_sc_client_id(cid)
+                _sc_client_ready = True
             else:
-                # No selenium script; try loading from config directly
-                cfg = _get_config()
-                if cfg.get("sc_client_id"):
+                # Last resort: if config already has a client_id, stay ready
+                existing = _get_config().get("sc_client_id")
+                if existing:
+                    logger.warning("[SC-REFRESH] Could not refresh — using existing config id")
                     _sc_client_ready = True
         except Exception:
             logger.exception("[SC-REFRESH] Unhandled error in cycle %d", cycle)
@@ -597,6 +653,9 @@ def sc_resolve():
         result = get_profile(sc, url)
         return jsonify({"status": "ok", **result})
     except Exception as e:
+        # 401 after failed client_id refresh → treat as "still connecting"
+        if "401" in str(e):
+            return jsonify({"status": "connecting", "reason": "SoundCloud auth refreshing", "retry_after": 15})
         logger.exception("[SC] resolve failed")
         return jsonify({"status": "error", "error": str(e)}), 500
 

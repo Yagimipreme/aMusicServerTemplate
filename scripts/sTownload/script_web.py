@@ -144,6 +144,12 @@ def download_url(url: str, out_dir: str) -> tuple[str | None, list[str]]:
     ffmpeg_path = shutil.which("ffmpeg")
     ffmpeg_location = os.path.dirname(ffmpeg_path) if ffmpeg_path else None
 
+    # Download fragments/temp files to local /tmp to avoid NAS rename failures
+    # (CIFS/NFS mounts can fail on concurrent-fragment part-file renames).
+    # yt-dlp moves the finished mp3 to out_dir only after conversion completes.
+    tmp_dir = "/tmp/ytdlp_dl"
+    os.makedirs(tmp_dir, exist_ok=True)
+
     ydl_opts = {
         # Prefer pure audio streams; fall back to small (≤480p) video if no
         # audio-only stream exists (very old YouTube uploads only ship muxed
@@ -153,7 +159,8 @@ def download_url(url: str, out_dir: str) -> tuple[str | None, list[str]]:
         "format": "bestaudio/best[height<=480]/best",
         "noplaylist": not is_playlist,
 
-        "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
+        "paths": {"home": out_dir, "temp": tmp_dir},
+        "outtmpl": "%(title)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
         "retries": 10,

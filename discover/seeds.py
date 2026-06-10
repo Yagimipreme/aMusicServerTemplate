@@ -91,15 +91,19 @@ def get_bootstrap_seeds(cfg, subsonic, lastfm_client=None):
     except Exception:
         logger.warning("discover.seeds: could not fetch library artist frequency", exc_info=True)
 
-    # Dedup preserving insertion order
+    # Dedup preserving insertion order; normalise to {"name": ..., "id": ...} dicts
     seen, result = set(), []
     for s in seeds:
-        # seeds may be dicts (from subsonic) or plain strings
-        name = s.get("name", "") if isinstance(s, dict) else s
+        if isinstance(s, dict):
+            name = s.get("name", "")
+            sid = s.get("id")
+        else:
+            name = s
+            sid = None
         cf = name.casefold()
         if name and cf not in seen:
             seen.add(cf)
-            result.append(name)
+            result.append({"name": name, "id": sid})
 
     return result[:20]
 
@@ -131,11 +135,11 @@ def get_csv_artists(csv_dir: str, limit: int = 30) -> list:
 
 
 def get_library_artist_frequency(subsonic, limit: int = 20) -> list:
-    """Return up to `limit` artist names sorted by track count in the Navidrome library."""
+    """Return up to `limit` artist dicts (name, id) sorted by play count in the Navidrome library."""
     try:
         artists = subsonic.get_frequent_artists(size=200)
         # get_frequent_artists already returns them sorted by play count
-        return [a["name"] for a in artists[:limit] if a.get("name")]
+        return [a for a in artists[:limit] if a.get("name")]
     except Exception:
         logger.warning("discover.seeds: get_library_artist_frequency failed", exc_info=True)
         return []

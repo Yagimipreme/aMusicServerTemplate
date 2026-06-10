@@ -48,7 +48,13 @@ def expand_similar(subsonic, seeds, per_seed: int = 20, lastfm_client=None,
             if lastfm_client is not None:
                 sims = _expand_via_lastfm(lastfm_client, seed["name"])
             else:
-                sims = subsonic.get_artist_info2(seed["id"], count=per_seed)
+                sid = seed.get("id")
+                if not sid:
+                    sid = subsonic.find_artist_id(seed["name"])
+                if not sid:
+                    logger.warning("expand: no Navidrome id for %s — skipping", seed.get("name"))
+                    continue
+                sims = subsonic.get_artist_info2(sid, count=per_seed)
         except Exception:
             logger.warning("expand: failed for %s — skipping", seed.get("name"))
             continue
