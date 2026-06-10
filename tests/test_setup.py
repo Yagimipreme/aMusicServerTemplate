@@ -35,13 +35,16 @@ def test_load_config_returns_empty_dict_when_file_missing(tmp_path):
 def test_save_and_reload_config(tmp_path):
     import setup as _setup_mod
     cfg_path = tmp_path / "config.json"
-    orig = _setup_mod.CONFIG_PATH
+    orig_cfg = _setup_mod.CONFIG_PATH
+    orig_ex = _setup_mod.CONFIG_EXAMPLE_PATH
     _setup_mod.CONFIG_PATH = str(cfg_path)
+    _setup_mod.CONFIG_EXAMPLE_PATH = str(tmp_path / "nonexistent.json")
     try:
         _setup_mod._save_config({"song_dir": "/music", "navidrome_url": "http://localhost:4533"})
         result = _setup_mod._load_config()
     finally:
-        _setup_mod.CONFIG_PATH = orig
+        _setup_mod.CONFIG_PATH = orig_cfg
+        _setup_mod.CONFIG_EXAMPLE_PATH = orig_ex
     assert result["song_dir"] == "/music"
     assert result["navidrome_url"] == "http://localhost:4533"
 

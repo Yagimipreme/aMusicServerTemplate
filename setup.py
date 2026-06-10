@@ -22,6 +22,9 @@ def _load_config():
             try:
                 with open(path, encoding="utf-8") as f:
                     return json.load(f)
+            except json.JSONDecodeError as exc:
+                if path == CONFIG_PATH:
+                    print(f"Warning: {path} is not valid JSON ({exc}); ignoring it.")
             except Exception:
                 pass
     return {}
