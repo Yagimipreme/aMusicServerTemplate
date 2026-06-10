@@ -1,14 +1,21 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
+"""Flask-based HTTP server — replaces stdlib HTTPServer.
+
+All existing routes are preserved 1:1. New routes added per spec.
+"""
 import json
+import logging
 import os
 import re
 import sys
-import logging
 import threading
-import runpy
-import importlib.util
 import time
+import importlib.util
+import runpy
 import shutil
+import uuid
+
+from flask import Flask, jsonify, redirect, render_template, request
+from flask_cors import CORS
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
@@ -16,29 +23,53 @@ _SERVER_DIR   = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SERVER_DIR, "../../"))
 _CONFIG_PATH  = os.path.join(_PROJECT_ROOT, "config.json")
 _LOG_DIR      = os.path.join(_PROJECT_ROOT, "logs")
+_TEMPLATE_DIR = os.path.join(_PROJECT_ROOT, "web", "templates")
+_STATIC_DIR   = os.path.join(_PROJECT_ROOT, "web", "static")
 
 os.makedirs(_LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(_LOG_DIR, 'server.log')
+LOG_FILE = os.path.join(_LOG_DIR, "server.log")
 
-# ── Logging (file + console) ───────────────────────────────────────────────────
+# ── Logging ────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s: %(message)s',
+    format="%(asctime)s %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 
+# ── Flask app ──────────────────────────────────────────────────────────────────
 
-# ── Discover engine wiring ─────────────────────────────────────────────────────
+app = Flask(
+    __name__,
+    template_folder=_TEMPLATE_DIR,
+    static_folder=_STATIC_DIR,
+    static_url_path="/static",
+)
+CORS(app)
+
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+# ── Import/download job registry ───────────────────────────────────────────────
+
+_import_jobs: dict = {}  # job_id -> {total, done, errors, tracks: [{title, status}]}
+
+# ── Enrich state ──────────────────────────────────────────────────────────────
+
+_enrich_running = threading.Lock()
+_enrich_last_result: dict = {"status": "idle"}
+
+# ── Dedup state ───────────────────────────────────────────────────────────────
+
+_dedup_running = threading.Lock()
+
+
+# ── Business logic (unchanged from stdlib version) ────────────────────────────
 
 def _build_discover_deps():
-    """Assemble engine dependencies from config + existing downloader. Returns deps or None."""
     from types import SimpleNamespace
-
-    if _PROJECT_ROOT not in sys.path:  # make `discover` importable
-        sys.path.insert(0, _PROJECT_ROOT)
     from discover.config import load_config
     from discover.subsonic import Subsonic
     from discover.state import load_state
@@ -47,13 +78,11 @@ def _build_discover_deps():
     cfg = load_config(_CONFIG_PATH)
     host = cfg.get("navidrome_url", "")
     user = cfg.get("navidrome_user", "")
-    pw = cfg.get("navidrome_pass", "")
+    pw   = cfg.get("navidrome_pass", "")
     if not host or not user or not pw:
         logger.warning("[DISCOVER] navidrome creds missing — engine disabled")
         return None
 
-    # Reuse the existing YouTube downloader's download_url(url, out_dir) + song_dir.
-    # download_url returns (playlist_title, [mp3_paths]); acquire() handles that tuple.
     dl_path = os.path.join(_PROJECT_ROOT, "scripts/sTownload/script_web.py")
     spec = importlib.util.spec_from_file_location("sTownload_web", dl_path)
     dl_mod = importlib.util.module_from_spec(spec)
@@ -71,7 +100,6 @@ def _build_discover_deps():
 
 
 def _run_discover_once():
-    """Build deps and run one weekly pass. Best-effort; logs and swallows errors."""
     try:
         deps = _build_discover_deps()
         if deps is None:
@@ -101,28 +129,8 @@ def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
         time.sleep(period_seconds)
 
 
-# ── Last.fm client factory ─────────────────────────────────────────────────────
-
-def _build_lastfm_client():
-    """Return a LastFMClient if api_key is configured, else None."""
-    if _PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, _PROJECT_ROOT)
-    from discover.config import load_config
-    cfg = load_config(_CONFIG_PATH)
-    api_key = cfg.get("lastfm_api_key", "")
-    if not api_key:
-        return None
-    from lastfm.client import LastFMClient
-    return LastFMClient(api_key)
-
-
-# ── Playlist Mix ───────────────────────────────────────────────────────────────
-
 def _run_playlist_mix(playlist_id: str, count: int) -> dict:
-    """Build a playlist mix from an existing Navidrome playlist using Last.fm signals."""
     try:
-        if _PROJECT_ROOT not in sys.path:
-            sys.path.insert(0, _PROJECT_ROOT)
         from discover.config import load_config
         from discover.subsonic import Subsonic
         from lastfm.tags import get_artist_tags, build_genre_profile
@@ -146,16 +154,14 @@ def _run_playlist_mix(playlist_id: str, count: int) -> dict:
         disc = cfg.get("discover") or {}
         seed_count = disc.get("playlist_seed_artist_count", 10)
 
-        # 1. Fetch playlist
         pl = subsonic.get_playlist(playlist_id)
         if not pl:
             return {"status": "error", "error": f"playlist {playlist_id!r} not found"}
         source_name = pl.get("name", playlist_id)
         tracks = pl.get("entry", []) or []
 
-        # 2. Extract seed artists by frequency
-        freq: dict[str, int] = {}
-        canonical: dict[str, str] = {}
+        freq: dict = {}
+        canonical: dict = {}
         for t in tracks:
             a = (t.get("artist") or "").strip()
             if not a:
@@ -173,14 +179,11 @@ def _run_playlist_mix(playlist_id: str, count: int) -> dict:
         if not seed_artists:
             return {"status": "error", "error": "playlist has no tracks with artist tags"}
 
-        # 3. Build genre fingerprint
         artist_tag_sets = [get_artist_tags(lfm, a) for a in seed_artists]
         genre_profile = build_genre_profile(artist_tag_sets)
-        logger.info("[PLAYLIST_MIX] genre profile: %s", list(genre_profile.items())[:5])
 
-        # 4. Get similar artists for each seed
-        all_similar: dict[str, float] = {}  # name.casefold() -> best match score
-        canonical_sim: dict[str, str] = {}
+        all_similar: dict = {}
+        canonical_sim: dict = {}
         seed_set = {a.casefold() for a in seed_artists}
         for a in seed_artists:
             sims = get_similar_artists(lfm, a, limit=50)
@@ -195,10 +198,8 @@ def _run_playlist_mix(playlist_id: str, count: int) -> dict:
         if not all_similar:
             return {"status": "error", "error": "no similar artists found via Last.fm"}
 
-        # 5. Get tags for each candidate + score
-        similar_list = [{"name": canonical_sim[cf], "match": m}
-                        for cf, m in all_similar.items()]
-        candidate_tags: dict[str, list] = {}
+        similar_list = [{"name": canonical_sim[cf], "match": m} for cf, m in all_similar.items()]
+        candidate_tags: dict = {}
         for sim in similar_list:
             cf = sim["name"].casefold()
             candidate_tags[cf] = get_artist_tags(lfm, sim["name"])
@@ -206,9 +207,8 @@ def _run_playlist_mix(playlist_id: str, count: int) -> dict:
         scored = score_candidates(similar_list, genre_profile, candidate_tags)
         top_candidates = [s for s in scored if s["score"] > 0 or not genre_profile]
         if not top_candidates:
-            top_candidates = scored  # fallback: use all
+            top_candidates = scored
 
-        # 6. Get top tracks for candidates and collect song IDs from Navidrome
         acquired_ids = []
         for candidate in top_candidates:
             if len(acquired_ids) >= count:
@@ -217,9 +217,7 @@ def _run_playlist_mix(playlist_id: str, count: int) -> dict:
             for track in top_tracks:
                 if len(acquired_ids) >= count:
                     break
-                hits = subsonic.search_songs(
-                    f"{track['artist']} {track['title']}", count=1
-                )
+                hits = subsonic.search_songs(f"{track['artist']} {track['title']}", count=1)
                 if hits:
                     sid = hits[0].get("id")
                     if sid and sid not in acquired_ids:
@@ -235,32 +233,18 @@ def _run_playlist_mix(playlist_id: str, count: int) -> dict:
         except Exception:
             pass
 
-        return {
-            "status": "ok",
-            "playlist_name": mix_name,
-            "acquired": len(acquired_ids),
-            "skipped": count - len(acquired_ids),
-        }
+        return {"status": "ok", "playlist_name": mix_name, "acquired": len(acquired_ids),
+                "skipped": count - len(acquired_ids)}
     except Exception as e:
         logger.exception("[PLAYLIST_MIX] failed")
         return {"status": "error", "error": str(e)}
 
 
-# ── Enrich scheduler ───────────────────────────────────────────────────────────
-
-_enrich_running = threading.Lock()
-_enrich_last_result: dict = {"status": "idle"}
-
-
 def _run_enrich_once(limit=None) -> dict:
-    """Run one library enrichment pass. Returns result dict."""
     global _enrich_last_result
     if not _enrich_running.acquire(blocking=False):
-        logger.warning("[ENRICH] Already running — skipping")
         return {"status": "skipped", "reason": "already running"}
     try:
-        if _PROJECT_ROOT not in sys.path:
-            sys.path.insert(0, _PROJECT_ROOT)
         from discover.config import load_config
         cfg = load_config(_CONFIG_PATH)
         api_key = cfg.get("lastfm_api_key", "")
@@ -278,9 +262,7 @@ def _run_enrich_once(limit=None) -> dict:
         from lastfm.client import LastFMClient
         from library.enrich import run as enrich_run
         lfm = LastFMClient(api_key)
-        result = enrich_run(song_dir, lfm,
-                            only_missing_genre=only_missing,
-                            limit=limit)
+        result = enrich_run(song_dir, lfm, only_missing_genre=only_missing, limit=limit)
         result["status"] = "ok"
         logger.info("[ENRICH] complete: %s", result)
         _enrich_last_result = result
@@ -294,25 +276,15 @@ def _run_enrich_once(limit=None) -> dict:
         _enrich_running.release()
 
 
-# ── Dedup scheduler ────────────────────────────────────────────────────────────
-
-_dedup_running = threading.Lock()
-
-
 def _run_dedup_once(force_dry_run=False):
-    """Run one dedup scan. Returns report dict."""
     if not _dedup_running.acquire(blocking=False):
-        logger.warning("[DEDUP] Scan already running — skipping")
         return {"status": "skipped", "reason": "already running"}
     try:
-        if _PROJECT_ROOT not in sys.path:
-            sys.path.insert(0, _PROJECT_ROOT)
         from library.dedupe import run as dedup_run
         from discover.config import load_config
         cfg = load_config(_CONFIG_PATH)
         song_dir = cfg.get("song_dir", "")
         if not song_dir:
-            logger.warning("[DEDUP] song_dir not configured")
             return {"status": "disabled", "reason": "song_dir not set"}
         auto_delete = False if force_dry_run else cfg.get("dedup", {}).get("auto_delete", False)
         result = dedup_run(song_dir, auto_delete=auto_delete)
@@ -326,7 +298,6 @@ def _run_dedup_once(force_dry_run=False):
 
 
 def _dedup_scheduled_loop():
-    """Sleep interval_hours then run dedup; re-reads config each cycle."""
     from discover.config import load_config
     while True:
         cfg = load_config(_CONFIG_PATH)
@@ -336,321 +307,602 @@ def _dedup_scheduled_loop():
         _run_dedup_once()
 
 
-# ── HTTP handler ───────────────────────────────────────────────────────────────
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def _set_headers(self, status_code=200):
-        self.send_response(status_code)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-
-    def do_OPTIONS(self):
-        self._set_headers(204)
-
-    def do_POST(self):
-        content_length = int(self.headers.get('Content-Length') or 0)
-        post_data = self.rfile.read(content_length)
-
-        if self.path.rstrip('/') == '/discover/run':
-            result = _run_discover_once()
-            code = 200 if result.get("status") in ("ok", "disabled") else 500
-            self._set_headers(code)
-            self.wfile.write(json.dumps(result).encode())
-            return
-
-        if self.path.rstrip('/') == '/library/dedup/run':
-            result = _run_dedup_once(force_dry_run=False)
-            code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
-            self._set_headers(code)
-            self.wfile.write(json.dumps(result).encode())
-            return
-
-        if self.path.rstrip('/') == '/library/dedup/report':
-            result = _run_dedup_once(force_dry_run=True)
-            code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
-            self._set_headers(code)
-            self.wfile.write(json.dumps(result).encode())
-            return
-
-        if self.path.rstrip('/') == '/discover/playlist_mix':
-            try:
-                body = json.loads(post_data.decode('utf-8')) if post_data else {}
-            except Exception:
-                body = {}
-            playlist_id = body.get('playlist_id', '')
-            if not playlist_id:
-                self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "error": "playlist_id required"}).encode())
-                return
-            cfg_disc = {}
-            try:
-                with open(_CONFIG_PATH, 'r', encoding='utf-8') as f:
-                    cfg_disc = json.load(f).get('discover') or {}
-            except Exception:
-                pass
-            count = body.get('count', cfg_disc.get('playlist_mix_count', 20))
-            result = _run_playlist_mix(playlist_id, count)
-            code = 200 if result.get("status") in ("ok", "error", "disabled") else 500
-            self._set_headers(code)
-            self.wfile.write(json.dumps(result).encode())
-            return
-
-        if self.path.rstrip('/') == '/library/enrich':
-            try:
-                body = json.loads(post_data.decode('utf-8')) if post_data else {}
-            except Exception:
-                body = {}
-            limit = body.get('limit', None)
-            def _enrich_bg():
-                _run_enrich_once(limit=limit)
-            t = threading.Thread(target=_enrich_bg, daemon=True)
-            t.start()
-            self._set_headers(200)
-            self.wfile.write(json.dumps({"status": "started"}).encode())
-            return
-
-        try:
-            data = json.loads(post_data.decode('utf-8'))
-            incoming_url = data.get('url', '')
-            m3u_file = data.get('m3u', 'default_playlist')
-            logger.info('Received POST from %s: url=%s m3u=%s', self.client_address, incoming_url, m3u_file)
-
-            script_to_run = None
-
-            if re.search(r"https?://(www\.)?youtube\.", incoming_url):
-                candidates = [
-                    "scripts/sTownload/script_web.py",
-                    "scripts/sTownload/app.py",
-                ]
-            elif re.search(r"https?://(www\.)?soundcloud\.", incoming_url):
-                candidates = [
-                    "scripts/Sc2Sp_src/script_web.py",
-                ]
-            else:
-                candidates = []
-
-            for cand in candidates:
-                cand_path = os.path.join(_PROJECT_ROOT, cand)
-                if os.path.exists(cand_path):
-                    script_to_run = cand_path
-                    logger.info('Selected script: %s', script_to_run)
-                    break
-
-            if script_to_run:
-                def _run_script(path, url_arg, m3u_arg):
-                    try:
-                        script_dir = os.path.dirname(path)
-                        old_argv = sys.argv[:]
-                        old_cwd  = os.getcwd()
-
-                        if shutil.which('ffmpeg') is None:
-                            logger.warning('ffmpeg not found on PATH')
-
-                        # Ensure the script's directory is on sys.path so
-                        # relative package imports (e.g. "import Sc2Sp.script2")
-                        # work when the file is loaded via runpy.
-                        if script_dir not in sys.path:
-                            sys.path.insert(0, script_dir)
-
-                        try:
-                            sys.argv = [path, url_arg, m3u_arg]
-                            os.chdir(script_dir)
-                            logger.info('Executing script in-thread: %s', path)
-                            runpy.run_path(path, run_name='__main__')
-                            logger.info('Script finished: %s', path)
-                        finally:
-                            sys.argv = old_argv
-                            try:
-                                os.chdir(old_cwd)
-                            except Exception:
-                                pass
-                    except Exception:
-                        logger.exception('Unhandled exception while running script: %s', path)
-
-                try:
-                    t = threading.Thread(target=_run_script, args=(script_to_run, incoming_url, m3u_file), daemon=True)
-                    t.start()
-                    response_msg = {"status": "started", "script": script_to_run}
-                    code = 200
-                except Exception:
-                    logger.exception('Failed to start in-thread script')
-                    response_msg = {"status": "error", "message": "could not start script thread"}
-                    code = 500
-            else:
-                logger.warning('No matching script found for URL: %s', incoming_url)
-                response_msg = {"status": "ignored", "reason": "no matching script found or URL not supported"}
-                code = 404
-
-        except Exception as e:
-            response_msg = {"status": "error", "message": str(e)}
-            code = 400
-
-        self._set_headers(code)
-        self.wfile.write(json.dumps(response_msg).encode())
-
-    def do_GET(self):
-        try:
-            # Route on path so we can serve the extension's "pull playlists"
-            # button without exposing Navidrome creds to the browser side.
-            if self.path.rstrip('/') == '/playlists':
-                return self._get_playlists()
-            if self.path.rstrip('/') == '/library/enrich/status':
-                self._set_headers(200)
-                self.wfile.write(json.dumps(_enrich_last_result).encode())
-                return
-            self._set_headers(200)
-            self.wfile.write(json.dumps({"status": "ok", "pid": os.getpid(), "cwd": os.getcwd()}).encode())
-        except Exception:
-            logger.exception('GET failed')
-            self._set_headers(500)
-            self.wfile.write(json.dumps({"status": "error"}).encode())
-
-    def _get_playlists(self):
-        """Proxy Navidrome's getPlaylists.view → minimal JSON for the extension."""
-        import urllib.parse as _up
-        import urllib.request as _ur
-
-        try:
-            cfg = {}
-            if os.path.exists(_CONFIG_PATH):
-                with open(_CONFIG_PATH, 'r', encoding='utf-8') as f:
-                    cfg = json.load(f)
-        except Exception:
-            logger.exception('GET /playlists: could not read config')
-            cfg = {}
-
-        host = cfg.get('navidrome_url', 'http://localhost:4533')
-        nuser = cfg.get('navidrome_user', '')
-        npw   = cfg.get('navidrome_pass', '')
-        if not nuser or not npw:
-            self._set_headers(503)
-            self.wfile.write(json.dumps({
-                "status": "error",
-                "error": "navidrome credentials not configured in config.json",
-            }).encode())
-            return
-
-        params = _up.urlencode({
-            'u': nuser, 'p': npw, 'v': '1.16.1', 'c': 'amusicserver-ext', 'f': 'json'
-        })
-        url = f"{host}/rest/getPlaylists.view?{params}"
-        try:
-            with _ur.urlopen(url, timeout=8) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-        except Exception as e:
-            logger.exception('GET /playlists: upstream call failed')
-            self._set_headers(502)
-            self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode())
-            return
-
-        sr = data.get('subsonic-response', {})
-        if sr.get('status') != 'ok':
-            err = sr.get('error', {}).get('message', 'unknown navidrome error')
-            self._set_headers(502)
-            self.wfile.write(json.dumps({"status": "error", "error": err}).encode())
-            return
-
-        raw = sr.get('playlists', {}).get('playlist', []) or []
-        playlists = [
-            {"name": p.get("name", ""), "songCount": p.get("songCount", 0)}
-            for p in raw if p.get("name")
-        ]
-        self._set_headers(200)
-        self.wfile.write(json.dumps({"status": "ok", "playlists": playlists}).encode())
-
-
-# ── SoundCloud client_id background refresher ──────────────────────────────────
-
 def _refresh_sc_client_id_loop(period_seconds=3600):
-    """Periodically fetch and persist a fresh SoundCloud client_id via Selenium.
-    Best-effort: failures are logged and ignored.
-    """
-    script_fp = os.path.join(_PROJECT_ROOT, 'scripts/Sc2Sp_src/script_web.py')
+    script_fp = os.path.join(_PROJECT_ROOT, "scripts/Sc2Sp_src/script_web.py")
     cycle = 0
-
     while True:
         cycle += 1
-        logger.info('[SC-REFRESH] Cycle %d starting (interval=%ds)', cycle, period_seconds)
-
         try:
-            if not os.path.exists(script_fp):
-                logger.warning('[SC-REFRESH] sc2 helper not found at: %s', script_fp)
-            else:
-                logger.debug('[SC-REFRESH] Loading sc2 helper: %s', script_fp)
-                spec   = importlib.util.spec_from_file_location('sc2_web_helper', script_fp)
+            if os.path.exists(script_fp):
+                spec   = importlib.util.spec_from_file_location("sc2_web_helper", script_fp)
                 module = importlib.util.module_from_spec(spec)
                 try:
                     spec.loader.exec_module(module)
-                    logger.debug('[SC-REFRESH] sc2 helper loaded OK')
                 except Exception:
-                    logger.exception('[SC-REFRESH] Failed to load sc2 helper module')
+                    logger.exception("[SC-REFRESH] Failed to load sc2 helper module")
                     module = None
 
-                if module is None:
-                    logger.warning('[SC-REFRESH] Skipping cycle %d — module load failed', cycle)
-                elif not hasattr(module, 'fetch_client_id_via_selenium'):
-                    logger.warning('[SC-REFRESH] fetch_client_id_via_selenium not found in module')
-                else:
-                    logger.info('[SC-REFRESH] Launching headless Chrome to fetch client_id …')
+                if module and hasattr(module, "fetch_client_id_via_selenium"):
                     try:
                         cid = module.fetch_client_id_via_selenium()
                         if cid:
-                            logger.info('[SC-REFRESH] Got client_id: %s…%s', cid[:4], cid[-4:])
-                            try:
-                                cfg = {}
-                                if os.path.exists(_CONFIG_PATH):
-                                    with open(_CONFIG_PATH, 'r', encoding='utf-8') as f:
-                                        cfg = json.load(f)
-                                cfg['sc_client_id']    = cid
-                                cfg['sc_client_id_ts'] = int(time.time())
-                                with open(_CONFIG_PATH, 'w', encoding='utf-8') as f:
-                                    json.dump(cfg, f, ensure_ascii=False, indent=2)
-                                logger.info('[SC-REFRESH] Persisted sc_client_id to config')
-                            except Exception:
-                                logger.exception('[SC-REFRESH] Failed to persist sc_client_id')
-                        else:
-                            logger.warning('[SC-REFRESH] fetch_client_id_via_selenium returned None — token unchanged')
+                            cfg = {}
+                            if os.path.exists(_CONFIG_PATH):
+                                with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                                    cfg = json.load(f)
+                            cfg["sc_client_id"] = cid
+                            cfg["sc_client_id_ts"] = int(time.time())
+                            with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+                                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                            logger.info("[SC-REFRESH] Persisted sc_client_id")
                     except Exception:
-                        logger.exception('[SC-REFRESH] fetch_client_id_via_selenium raised an exception')
+                        logger.exception("[SC-REFRESH] fetch_client_id_via_selenium raised")
         except Exception:
-            logger.exception('[SC-REFRESH] Unhandled error in cycle %d', cycle)
-
-        logger.info('[SC-REFRESH] Cycle %d done — sleeping %ds', cycle, period_seconds)
+            logger.exception("[SC-REFRESH] Unhandled error in cycle %d", cycle)
         time.sleep(period_seconds)
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+def _get_config() -> dict:
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-def start_background_server(port=5000):
-    logger.info('Server starting on port %d (pid=%d, root=%s)', port, os.getpid(), _PROJECT_ROOT)
+
+def _get_hostname() -> str:
+    return _get_config().get("hostname", "amusicserver.local")
+
+
+# ── Existing routes (migrated) ────────────────────────────────────────────────
+
+@app.route("/", methods=["GET"])
+def root_get():
+    return jsonify({"status": "ok", "pid": os.getpid(), "cwd": os.getcwd()})
+
+
+@app.route("/", methods=["POST"])
+def root_post():
+    """Download dispatcher — browser extension sends URL here."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        incoming_url = data.get("url", "")
+        m3u_file = data.get("m3u", "default_playlist")
+        logger.info("POST /: url=%s m3u=%s", incoming_url, m3u_file)
+
+        if re.search(r"https?://(www\.)?youtube\.", incoming_url):
+            candidates = ["scripts/sTownload/script_web.py", "scripts/sTownload/app.py"]
+        elif re.search(r"https?://(www\.)?soundcloud\.", incoming_url):
+            candidates = ["scripts/Sc2Sp_src/script_web.py"]
+        else:
+            candidates = []
+
+        script_to_run = None
+        for cand in candidates:
+            cand_path = os.path.join(_PROJECT_ROOT, cand)
+            if os.path.exists(cand_path):
+                script_to_run = cand_path
+                break
+
+        if not script_to_run:
+            return jsonify({"status": "ignored", "reason": "no matching script found or URL not supported"}), 404
+
+        def _run_script(path, url_arg, m3u_arg):
+            try:
+                script_dir = os.path.dirname(path)
+                old_argv = sys.argv[:]
+                old_cwd  = os.getcwd()
+                if script_dir not in sys.path:
+                    sys.path.insert(0, script_dir)
+                try:
+                    sys.argv = [path, url_arg, m3u_arg]
+                    os.chdir(script_dir)
+                    runpy.run_path(path, run_name="__main__")
+                finally:
+                    sys.argv = old_argv
+                    try:
+                        os.chdir(old_cwd)
+                    except Exception:
+                        pass
+            except Exception:
+                logger.exception("Unhandled exception running script: %s", path)
+
+        t = threading.Thread(target=_run_script, args=(script_to_run, incoming_url, m3u_file), daemon=True)
+        t.start()
+        return jsonify({"status": "started", "script": script_to_run})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route("/playlists", methods=["GET"])
+def get_playlists():
+    """Proxy Navidrome getPlaylists.view → minimal JSON for the extension."""
+    import urllib.parse as _up
+    import urllib.request as _ur
+    try:
+        cfg = _get_config()
+    except Exception:
+        cfg = {}
+
+    host  = cfg.get("navidrome_url", "http://localhost:4533")
+    nuser = cfg.get("navidrome_user", "")
+    npw   = cfg.get("navidrome_pass", "")
+    if not nuser or not npw:
+        return jsonify({"status": "error", "error": "navidrome credentials not configured"}), 503
+
+    params = _up.urlencode({"u": nuser, "p": npw, "v": "1.16.1", "c": "amusicserver-ext", "f": "json"})
+    url = f"{host}/rest/getPlaylists.view?{params}"
+    try:
+        with _ur.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 502
+
+    sr = data.get("subsonic-response", {})
+    if sr.get("status") != "ok":
+        err = sr.get("error", {}).get("message", "unknown navidrome error")
+        return jsonify({"status": "error", "error": err}), 502
+
+    raw = sr.get("playlists", {}).get("playlist", []) or []
+    playlists = [{"name": p.get("name", ""), "id": p.get("id", ""), "songCount": p.get("songCount", 0)}
+                 for p in raw if p.get("name")]
+    return jsonify({"status": "ok", "playlists": playlists})
+
+
+@app.route("/discover/run", methods=["POST"])
+def discover_run():
+    result = _run_discover_once()
+    code = 200 if result.get("status") in ("ok", "disabled") else 500
+    return jsonify(result), code
+
+
+@app.route("/discover/playlist_mix", methods=["POST"])
+def discover_playlist_mix():
+    body = request.get_json(force=True, silent=True) or {}
+    playlist_id = body.get("playlist_id", "")
+    if not playlist_id:
+        return jsonify({"status": "error", "error": "playlist_id required"}), 400
+    cfg_disc = _get_config().get("discover") or {}
+    count = body.get("count", cfg_disc.get("playlist_mix_count", 20))
+    result = _run_playlist_mix(playlist_id, count)
+    return jsonify(result)
+
+
+@app.route("/library/dedup/run", methods=["POST"])
+def dedup_run():
+    result = _run_dedup_once(force_dry_run=False)
+    code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
+    return jsonify(result), code
+
+
+@app.route("/library/dedup/report", methods=["POST"])
+def dedup_report():
+    result = _run_dedup_once(force_dry_run=True)
+    code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
+    return jsonify(result), code
+
+
+@app.route("/library/enrich", methods=["POST"])
+def library_enrich():
+    body = request.get_json(force=True, silent=True) or {}
+    limit = body.get("limit", None)
+    t = threading.Thread(target=_run_enrich_once, kwargs={"limit": limit}, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/library/enrich/status", methods=["GET"])
+def enrich_status():
+    return jsonify(_enrich_last_result)
+
+
+# ── Explore UI ────────────────────────────────────────────────────────────────
+
+@app.route("/explore", methods=["GET"])
+def explore():
+    hostname = _get_hostname()
+    return render_template("explore.html", hostname=hostname, port=5000)
+
+
+# ── SoundCloud routes ─────────────────────────────────────────────────────────
+
+def _get_sc_client():
+    """Return SCClient if sc_client_id is configured, else None."""
+    try:
+        from soundcloud.client import SCClient
+        cfg = _get_config()
+        cid = cfg.get("sc_client_id", "")
+        if not cid:
+            return None
+        return SCClient(cid, _CONFIG_PATH)
+    except Exception:
+        logger.warning("[SC] Could not build SCClient")
+        return None
+
+
+@app.route("/sc/resolve", methods=["GET"])
+def sc_resolve():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"status": "error", "error": "url required"}), 400
+    sc = _get_sc_client()
+    if not sc:
+        return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
+    try:
+        from soundcloud.mirror import get_profile
+        result = get_profile(sc, url)
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        logger.exception("[SC] resolve failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/sc/search/users", methods=["GET"])
+def sc_search_users():
+    q = request.args.get("q", "")
+    if not q:
+        return jsonify({"status": "error", "error": "q required"}), 400
+    sc = _get_sc_client()
+    if not sc:
+        return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
+    try:
+        from soundcloud.search import search_users
+        users = search_users(sc, q)
+        return jsonify({"status": "ok", "users": users})
+    except Exception as e:
+        logger.exception("[SC] search/users failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/sc/search/tracks", methods=["GET"])
+def sc_search_tracks():
+    q = request.args.get("q", "")
+    if not q:
+        return jsonify({"status": "error", "error": "q required"}), 400
+    sc = _get_sc_client()
+    if not sc:
+        return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
+    try:
+        from soundcloud.search import search_tracks
+        tracks = search_tracks(sc, q)
+        return jsonify({"status": "ok", "tracks": tracks})
+    except Exception as e:
+        logger.exception("[SC] search/tracks failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/sc/preview", methods=["GET"])
+def sc_preview():
+    stream_url = request.args.get("stream_url", "")
+    if not stream_url:
+        return jsonify({"status": "error", "error": "stream_url required"}), 400
+    sc = _get_sc_client()
+    if not sc:
+        return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
+    composed = f"{stream_url}?client_id={sc.client_id}"
+    return jsonify({"status": "ok", "stream_url": composed})
+
+
+# ── Spotify routes ────────────────────────────────────────────────────────────
+
+def _get_spotify_client():
+    """Return SpotifyClient or None if cipher fetch failed."""
+    try:
+        from spotify.client import SpotifyClient
+        return SpotifyClient()
+    except Exception as e:
+        logger.warning("[SPOTIFY] Could not build SpotifyClient: %s", e)
+        return None
+
+
+@app.route("/spotify/artist", methods=["POST"])
+def spotify_artist():
+    body = request.get_json(force=True, silent=True) or {}
+    uri_or_url = body.get("uri") or body.get("url", "")
+    if not uri_or_url:
+        return jsonify({"status": "error", "error": "uri or url required"}), 400
+    sp = _get_spotify_client()
+    if not sp:
+        return jsonify({"status": "unavailable", "reason": "cipher fetch failed"})
+    try:
+        from spotify.queries import get_artist_overview
+        result = get_artist_overview(sp, uri_or_url)
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        logger.exception("[SPOTIFY] artist failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/spotify/playlist", methods=["POST"])
+def spotify_playlist():
+    body = request.get_json(force=True, silent=True) or {}
+    uri_or_url = body.get("uri") or body.get("url", "")
+    limit = int(body.get("limit", 50))
+    if not uri_or_url:
+        return jsonify({"status": "error", "error": "uri or url required"}), 400
+    sp = _get_spotify_client()
+    if not sp:
+        return jsonify({"status": "unavailable", "reason": "cipher fetch failed"})
+    try:
+        from spotify.queries import get_playlist
+        result = get_playlist(sp, uri_or_url, limit=limit)
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        logger.exception("[SPOTIFY] playlist failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/spotify/search", methods=["GET"])
+def spotify_search():
+    q = request.args.get("q", "")
+    if not q:
+        return jsonify({"status": "error", "error": "q required"}), 400
+    sp = _get_spotify_client()
+    if not sp:
+        return jsonify({"status": "unavailable", "reason": "cipher fetch failed"})
+    try:
+        from spotify.queries import search_artists
+        artists = search_artists(sp, q)
+        return jsonify({"status": "ok", "artists": artists})
+    except Exception as e:
+        logger.exception("[SPOTIFY] search failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── Universal preview ─────────────────────────────────────────────────────────
+
+@app.route("/preview", methods=["GET"])
+def preview():
+    source = request.args.get("source", "unknown")
+    url    = request.args.get("url", "")
+    artist = request.args.get("artist", "")
+    title  = request.args.get("title", "")
+
+    try:
+        if source == "sc" and url:
+            sc = _get_sc_client()
+            if sc:
+                stream = f"{url}?client_id={sc.client_id}"
+                return jsonify({"status": "ok", "stream_url": stream})
+            return jsonify({"status": "error", "error": "sc not configured"}), 503
+
+        if source in ("yt", "unknown") or url:
+            import subprocess
+            query = url if url else f"ytsearch:{artist} {title}"
+            try:
+                result = subprocess.run(
+                    [".venv/bin/yt-dlp", "--get-url", "-f", "bestaudio/best", "--no-playlist", query],
+                    capture_output=True, text=True, timeout=15,
+                    cwd=_PROJECT_ROOT,
+                )
+                stream = result.stdout.strip().splitlines()[0] if result.stdout.strip() else None
+                if stream:
+                    return jsonify({"status": "ok", "stream_url": stream})
+            except Exception:
+                pass
+            return jsonify({"status": "ok", "stream_url": None})
+
+        return jsonify({"status": "ok", "stream_url": None})
+    except Exception as e:
+        logger.exception("[PREVIEW] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── Import tracks / status ─────────────────────────────────────────────────────
+
+@app.route("/import/tracks", methods=["POST"])
+def import_tracks():
+    body = request.get_json(force=True, silent=True) or {}
+    tracks = body.get("tracks", [])
+    playlist_name = body.get("playlist_name", "Import")
+    if not tracks:
+        return jsonify({"status": "error", "error": "tracks required"}), 400
+
+    job_id = str(uuid.uuid4())
+    job = {
+        "total": len(tracks),
+        "done": 0,
+        "errors": 0,
+        "tracks": [{"title": t.get("title", "?"), "artist": t.get("artist", ""), "status": "queued"}
+                   for t in tracks],
+    }
+    _import_jobs[job_id] = job
+
+    def _run_import():
+        cfg = _get_config()
+        song_dir = cfg.get("song_dir", "") or str(os.path.join(os.path.expanduser("~"), "Music"))
+        os.makedirs(song_dir, exist_ok=True)
+
+        dl_path = os.path.join(_PROJECT_ROOT, "scripts/sTownload/script_web.py")
+        sc_path = os.path.join(_PROJECT_ROOT, "scripts/Sc2Sp_src/script_web.py")
+
+        for i, track in enumerate(tracks):
+            job["tracks"][i]["status"] = "downloading"
+            url = track.get("url", "")
+            artist = track.get("artist", "")
+            title_  = track.get("title", "")
+            source = track.get("source", "unknown")
+            try:
+                if source == "sc" or (url and "soundcloud.com" in url):
+                    spec = importlib.util.spec_from_file_location("sc_web", sc_path)
+                    mod  = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    mp3 = mod.download_single_soundcloud(url, song_dir)
+                elif url:
+                    spec = importlib.util.spec_from_file_location("yt_web", dl_path)
+                    mod  = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    _, paths = mod.download_url(url, song_dir)
+                    mp3 = paths[0] if paths else None
+                else:
+                    spec = importlib.util.spec_from_file_location("yt_web2", dl_path)
+                    mod  = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    _, paths = mod.download_url(f"ytsearch:{artist} {title_}", song_dir)
+                    mp3 = paths[0] if paths else None
+
+                if mp3 and os.path.exists(mp3):
+                    if url:
+                        try:
+                            from library.tagger import write_source_url
+                            write_source_url(mp3, url)
+                        except Exception:
+                            pass
+                    job["tracks"][i]["status"] = "done"
+                    job["done"] += 1
+                else:
+                    job["tracks"][i]["status"] = "error"
+                    job["errors"] += 1
+            except Exception:
+                logger.exception("[IMPORT] track failed: %s", title_)
+                job["tracks"][i]["status"] = "error"
+                job["errors"] += 1
+
+        try:
+            from discover.config import load_config
+            from discover.subsonic import Subsonic
+            cfg2 = load_config(_CONFIG_PATH)
+            host = cfg2.get("navidrome_url", "")
+            user = cfg2.get("navidrome_user", "")
+            pw   = cfg2.get("navidrome_pass", "")
+            if host and user and pw:
+                sub = Subsonic(host, user, pw)
+                sub.start_scan()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_run_import, daemon=True)
+    t.start()
+    return jsonify({"status": "ok", "job_id": job_id, "queued": len(tracks)})
+
+
+@app.route("/import/status", methods=["GET"])
+def import_status():
+    job_id = request.args.get("job_id", "")
+    job = _import_jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "error", "error": "job not found"}), 404
+    return jsonify({"status": "ok", **job})
+
+
+# ── Share routes ──────────────────────────────────────────────────────────────
+
+@app.route("/share/link", methods=["GET"])
+def share_link():
+    artist = request.args.get("artist", "")
+    title  = request.args.get("title", "")
+    url    = request.args.get("url", "")
+    if not artist or not title:
+        return jsonify({"status": "error", "error": "artist and title required"}), 400
+    try:
+        from share.codec import encode_track
+        share_url = encode_track(artist, title, url or None)
+        return jsonify({"status": "ok", "url": share_url})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/share/code", methods=["GET"])
+def share_code():
+    playlist_id = request.args.get("playlist_id", "")
+    if not playlist_id:
+        return jsonify({"status": "error", "error": "playlist_id required"}), 400
+    try:
+        import urllib.parse as _up
+        import urllib.request as _ur
+        cfg = _get_config()
+        host  = cfg.get("navidrome_url", "http://localhost:4533")
+        nuser = cfg.get("navidrome_user", "")
+        npw   = cfg.get("navidrome_pass", "")
+        params = _up.urlencode({"u": nuser, "p": npw, "v": "1.16.1", "c": "amusicserver", "f": "json",
+                                "id": playlist_id})
+        url = f"{host}/rest/getPlaylist.view?{params}"
+        with _ur.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        pl = data.get("subsonic-response", {}).get("playlist", {})
+        name = pl.get("name", "Playlist")
+        tracks_raw = pl.get("entry", []) or []
+        tracks = []
+        for t in tracks_raw:
+            tracks.append({"artist": t.get("artist", ""), "title": t.get("title", ""), "url": ""})
+        from share.codec import encode_playlist
+        text = encode_playlist(name, tracks)
+        return jsonify({"status": "ok", "text": text})
+    except Exception as e:
+        logger.exception("[SHARE] code generation failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/share/parse", methods=["POST"])
+def share_parse():
+    body = request.get_json(force=True, silent=True) or {}
+    text = body.get("text", "")
+    if not text:
+        return jsonify({"status": "error", "error": "text required"}), 400
+    try:
+        from share.codec import decode
+        result = decode(text)
+        return jsonify({"status": "ok", **result})
+    except ValueError as e:
+        return jsonify({"status": "error", "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/share/import", methods=["GET"])
+def share_import():
+    """Receive shared link — redirect to explore page with payload in fragment."""
+    d = request.args.get("d", "")
+    if d:
+        return redirect(f"/explore#import:{d}")
+    return redirect("/explore")
+
+
+# ── Startup + zeroconf ────────────────────────────────────────────────────────
+
+def _start_zeroconf(hostname: str, port: int = 5000):
+    """Register mDNS service. Logs warning and returns on failure."""
+    try:
+        import socket
+        from zeroconf import Zeroconf, ServiceInfo
+        local_ip = socket.gethostbyname(socket.gethostname())
+        packed_ip = socket.inet_aton(local_ip)
+        info = ServiceInfo(
+            "_http._tcp.local.",
+            "amusicserver._http._tcp.local.",
+            addresses=[packed_ip],
+            port=port,
+            properties={},
+            server=f"{hostname}.",
+        )
+        zc = Zeroconf()
+        zc.register_service(info)
+        logger.info("[MDNS] Registered %s → %s:%d", hostname, local_ip, port)
+        return zc
+    except Exception as e:
+        logger.warning("[MDNS] Could not register mDNS service: %s", e)
+        return None
+
+
+def start_background_server(port: int = 5000):
+    logger.info("Server starting on port %d (pid=%d, root=%s)", port, os.getpid(), _PROJECT_ROOT)
 
     t_ref = threading.Thread(target=_refresh_sc_client_id_loop, args=(3600,), daemon=True)
     t_ref.start()
-    logger.info('Started background sc_client_id refresher thread')
 
     t_disc = threading.Thread(target=_discover_weekly_loop, daemon=True)
     t_disc.start()
-    logger.info('Started background discover weekly thread')
 
-    if _PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, _PROJECT_ROOT)
     from discover.config import load_config as _load_cfg
     _cfg_at_start = _load_cfg(_CONFIG_PATH)
     if _cfg_at_start.get("dedup", {}).get("enabled"):
         t_dedup = threading.Thread(target=_dedup_scheduled_loop, daemon=True)
         t_dedup.start()
-        logger.info("Started background dedup scheduler thread")
 
-    httpd = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        logger.info('Server stopped by KeyboardInterrupt')
-    except Exception:
-        logger.exception('Server encountered an error')
+    hostname = _cfg_at_start.get("hostname", "amusicserver.local")
+    _start_zeroconf(hostname, port)
+
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":

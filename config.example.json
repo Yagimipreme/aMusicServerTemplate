@@ -35,5 +35,6 @@
   "title_cleanup": {
     "enabled": true,
     "extra_suffixes_file": "title_suffixes.txt"
-  }
+  },
+  "hostname": "amusicserver.local"
 }

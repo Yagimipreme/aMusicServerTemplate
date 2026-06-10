@@ -92,3 +92,22 @@ def apply_from_config(path, config_path):
     except Exception:
         logger.exception("tagger: apply_from_config failed for %s", path)
         return False
+
+
+def write_source_url(path: str, url: str) -> None:
+    """Write source URL to WOAS (Official Audio Source) ID3 frame.
+
+    WOAS is the standard ID3 field for the origin URL of an audio file.
+    Best-effort; any exception is logged and swallowed.
+    """
+    if not url:
+        return
+    try:
+        tag = eyed3.load(path)
+        if tag is None or tag.tag is None:
+            return
+        tag.tag.frame_set["WOAS"] = eyed3.id3.frames.UrlFrame("WOAS", url)
+        tag.tag.save()
+        logger.info("tagger: WOAS set for %s", path)
+    except Exception:
+        logger.exception("tagger: write_source_url failed for %s", path)

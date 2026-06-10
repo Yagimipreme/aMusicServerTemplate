@@ -233,6 +233,15 @@ def process_track(href: str, client_id: str, out_dir: str = ".", title_override:
             apply_from_config(mp3, _CONFIG_PATH)
         except Exception:
             pass  # tagger is non-critical
+        # Write WOAS source URL tag
+        try:
+            if _PROJECT_ROOT not in sys.path:
+                sys.path.insert(0, _PROJECT_ROOT)
+            from library.tagger import write_source_url
+            permalink = track.get("permalink_url", "")
+            write_source_url(mp3, permalink)
+        except Exception:
+            pass  # WOAS is non-critical
     finally:
         if cover and os.path.exists(cover):
             try:

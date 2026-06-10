@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from library.tagger import apply_from_config, apply_to_file, clean_title
+from library.tagger import apply_from_config, apply_to_file, clean_title, write_source_url
 
 
 def test_clean_title_strips_parenthetical_suffix():
@@ -131,3 +131,41 @@ def test_apply_to_file_does_not_write_empty_title(tmp_path):
         changed = apply_to_file(str(mp3))
     assert changed is False
     mock_tag.save.assert_not_called()
+
+
+def test_write_source_url_sets_woas_frame(tmp_path):
+    mp3 = tmp_path / "song.mp3"
+    mp3.write_bytes(b"")
+    mock_tag = MagicMock()
+    mock_tag.frame_set = {}
+    mock_audio = MagicMock()
+    mock_audio.tag = mock_tag
+    with patch("library.tagger.eyed3") as mock_eyed3:
+        mock_eyed3.load.return_value = mock_audio
+        mock_eyed3.id3.frames.UrlFrame.return_value = MagicMock()
+        write_source_url(str(mp3), "https://soundcloud.com/burial/arch")
+    assert "WOAS" in mock_tag.frame_set
+    mock_tag.save.assert_called_once()
+
+
+def test_write_source_url_does_nothing_when_url_empty(tmp_path):
+    mp3 = tmp_path / "song.mp3"
+    mp3.write_bytes(b"")
+    mock_tag = MagicMock()
+    mock_audio = MagicMock()
+    mock_audio.tag = mock_tag
+    with patch("library.tagger.eyed3") as mock_eyed3:
+        mock_eyed3.load.return_value = mock_audio
+        write_source_url(str(mp3), "")
+    mock_tag.save.assert_not_called()
+
+
+def test_write_source_url_does_nothing_when_no_tag(tmp_path):
+    mp3 = tmp_path / "song.mp3"
+    mp3.write_bytes(b"")
+    mock_audio = MagicMock()
+    mock_audio.tag = None
+    with patch("library.tagger.eyed3") as mock_eyed3:
+        mock_eyed3.load.return_value = mock_audio
+        write_source_url(str(mp3), "https://soundcloud.com/burial/arch")
+    # No exception, no save

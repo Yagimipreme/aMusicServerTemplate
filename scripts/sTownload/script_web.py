@@ -295,6 +295,12 @@ def main(argv):
             apply_from_config(path, _CONFIG_PATH)
         except Exception:
             logger.exception('Title cleanup failed for %s', path)
+        # Write WOAS source URL tag
+        try:
+            from library.tagger import write_source_url
+            write_source_url(path, url)
+        except Exception:
+            logger.exception('WOAS write failed for %s', path)
 
     trigger_navidrome_scan()
     return 0

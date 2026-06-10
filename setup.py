@@ -78,6 +78,51 @@ def _open_folder(path):
         pass
 
 
+def _write_hosts_entry(hostname: str):
+    """Write 127.0.0.1 {hostname} to the system hosts file if not already present."""
+    import platform
+    plat = platform.system()
+    if plat == "Windows":
+        hosts_path = r"C:\Windows\System32\drivers\etc\hosts"
+    else:
+        hosts_path = "/etc/hosts"
+
+    try:
+        with open(hosts_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if hostname in content:
+            print(f"  hosts file already contains {hostname!r} — skipping.")
+            return
+    except Exception as e:
+        print(f"  Could not read hosts file ({hosts_path}): {e}")
+        print(f"  Add this line manually:  127.0.0.1  {hostname}")
+        return
+
+    entry = f"\n127.0.0.1  {hostname}\n"
+    try:
+        with open(hosts_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+        print(f"  Added to {hosts_path}: 127.0.0.1  {hostname}")
+    except PermissionError:
+        print(f"  Permission denied writing to {hosts_path}.")
+        if plat != "Windows":
+            # Try with sudo
+            try:
+                import subprocess
+                subprocess.run(
+                    ["sudo", "sh", "-c", f'echo "{entry}" >> {hosts_path}'],
+                    check=True,
+                )
+                print(f"  Added via sudo: 127.0.0.1  {hostname}")
+            except Exception:
+                print(f"  Could not write with sudo. Add manually:  127.0.0.1  {hostname}")
+        else:
+            print(f"  Run setup as Administrator, or add manually:  127.0.0.1  {hostname}")
+    except Exception as e:
+        print(f"  Could not write hosts file: {e}")
+        print(f"  Add manually:  127.0.0.1  {hostname}")
+
+
 def main():
     print("\n=== aMusicServer Setup Wizard ===\n")
     cfg = _load_config()
@@ -228,7 +273,7 @@ def main():
     cfg["dedup"] = new_dedup
 
     # ── Step 10: Title cleanup ────────────────────────────────────────────────
-    print("\nStep 10/10 — Title cleanup (strips 'Official Music Video', 'HD', etc. from song titles)")
+    print("\nStep 10/11 — Title cleanup (strips 'Official Music Video', 'HD', etc. from song titles)")
     print("  Runs automatically after every download. Add your own suffixes to title_suffixes.txt.")
     tc_cfg = cfg.get("title_cleanup") or {}
     tc_enabled = _ask_yn("  Enable title cleanup?", default=tc_cfg.get("enabled", True))
@@ -236,6 +281,18 @@ def main():
     if cfg.get("title_cleanup") != new_tc:
         changed.append("title_cleanup")
     cfg["title_cleanup"] = new_tc
+
+    # ── Step 11: Hostname + hosts file ───────────────────────────────────────
+    print("\nStep 11/11 — Share hostname (used in share links so any receiver can open them)")
+    print("  Default: amusicserver.local — works if you keep it consistent across devices.")
+    hostname = _ask("Hostname for share links", cfg.get("hostname", "amusicserver.local"))
+    hostname = hostname.strip().lower() or "amusicserver.local"
+    if cfg.get("hostname") != hostname:
+        changed.append("hostname")
+    cfg["hostname"] = hostname
+
+    # Write hosts file entry
+    _write_hosts_entry(hostname)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     _save_config(cfg)

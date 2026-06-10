@@ -1,3 +1,4 @@
+from unittest.mock import MagicMock, patch
 from discover.expand import expand_similar
 
 
@@ -28,3 +29,21 @@ def test_expand_excludes_artists_already_seeds():
     seeds = [{"id": "a1", "name": "BoC"}, {"id": "a2", "name": "Aphex"}]
     result = expand_similar(fake, seeds, per_seed=20)
     assert all(r["name"] != "Aphex" for r in result)
+
+
+def test_expand_with_soundcloud_client_merges_sc_candidates():
+    """When soundcloud_client is set, SC get_followings results are merged."""
+    fake = FakeSubsonic({})
+    seeds = [{"id": "a1", "name": "Burial"}]
+
+    sc_client = MagicMock()
+
+    # Patch get_followings and get_related
+    with patch("discover.expand.get_sc_followings") as mock_followings, \
+         patch("discover.expand.get_sc_related") as mock_related:
+        mock_followings.return_value = [{"id": "sc1", "name": "Shackleton"}]
+        mock_related.return_value = []
+        result = expand_similar(fake, seeds, per_seed=20, soundcloud_client=sc_client)
+
+    names = [r["name"] for r in result]
+    assert "Shackleton" in names

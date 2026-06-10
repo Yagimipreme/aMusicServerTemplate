@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Explore — aMusicServer</title>
+  <link rel="stylesheet" href="/static/explore.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Explore</h1>
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="sc">SoundCloud</button>
+        <button class="tab-btn" data-tab="spotify">Spotify</button>
+        <button class="tab-btn" data-tab="import">Import Share</button>
+      </nav>
+    </header>
+
+    <!-- SoundCloud Tab -->
+    <section id="tab-sc" class="tab-panel active">
+      <div class="search-bar">
+        <input type="text" id="sc-query" placeholder="Search or paste a SoundCloud URL…">
+        <button id="sc-go">Go</button>
+      </div>
+      <div class="sc-subtabs" id="sc-subtabs" style="display:none">
+        <button class="subtab-btn active" data-subtab="sc-users">Artist Results</button>
+        <button class="subtab-btn" data-subtab="sc-tracks">Track Results</button>
+      </div>
+      <div id="sc-users-panel" class="subtab-panel active">
+        <ul id="sc-user-list" class="user-list"></ul>
+      </div>
+      <div id="sc-tracks-panel" class="subtab-panel" style="display:none">
+        <ul id="sc-track-list" class="track-list"></ul>
+      </div>
+    </section>
+
+    <!-- Spotify Tab -->
+    <section id="tab-spotify" class="tab-panel" style="display:none">
+      <div class="search-bar">
+        <input type="text" id="sp-query" placeholder="Search artist or paste Spotify URL…">
+        <button id="sp-go">Go</button>
+      </div>
+      <ul id="sp-artist-list" class="user-list"></ul>
+      <ul id="sp-track-list" class="track-list"></ul>
+    </section>
+
+    <!-- Import Share Tab -->
+    <section id="tab-import" class="tab-panel" style="display:none">
+      <textarea id="import-paste" rows="8" placeholder="Paste share link or PLAYLIST: text block here…"></textarea>
+      <button id="import-parse">Parse</button>
+      <ul id="import-track-list" class="track-list"></ul>
+    </section>
+
+    <!-- Shared track list (populated from active tab) -->
+    <div id="track-list-wrapper">
+      <ul id="main-track-list" class="track-list"></ul>
+    </div>
+
+    <!-- Persistent audio player -->
+    <div id="player-bar">
+      <audio id="player" controls></audio>
+      <span id="player-label">No track selected</span>
+    </div>
+
+    <!-- Save bar -->
+    <div id="save-bar">
+      <span id="selected-count">0 selected</span>
+      <input type="text" id="playlist-name" placeholder="Playlist name">
+      <button id="save-selected">Save Selected</button>
+      <button id="save-all">Save All — 50 at a time</button>
+    </div>
+  </div>
+  <script src="/static/explore.js"></script>
+  <script>
+    // Inject server-side config for share hostname
+    window.SERVER_HOSTNAME = "{{ hostname }}";
+    window.SERVER_PORT = {{ port }};
+  </script>
+</body>
+</html>
