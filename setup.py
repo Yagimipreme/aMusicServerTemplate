@@ -167,11 +167,10 @@ def main():
 
     if lfm_key:
         print("\n  Add these lines to your navidrome.toml and restart Navidrome:")
-        print("  ┌──────────────────────────────────────┐")
-        print("  │ [LastFM]                             │")
-        print(f"  │ ApiKey = \"{lfm_key[:20]}...\"  │")
-        print(f"  │ Secret = \"<your-api-secret>\"        │")
-        print("  └──────────────────────────────────────┘")
+        print(f"\n  [LastFM]")
+        print(f"  ApiKey = \"{lfm_key}\"")
+        print(f"  Secret = \"{lfm_sec}\"")
+        print()
         print("  Common navidrome.toml locations:")
         print("    Linux:   /var/lib/navidrome/navidrome.toml")
         print("             ~/.config/navidrome/navidrome.toml")
