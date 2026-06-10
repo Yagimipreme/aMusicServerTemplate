@@ -104,10 +104,35 @@ async function handleSpTrackUrl(url) {
 }
 
 async function handleYtUrl(url) {
-  // YouTube URL — present as a single saveable track row
-  renderTracks([{title: decodeURIComponent(url.split("v=")[1]?.split("&")[0] || "YouTube video"),
-                 artist: "", url, source: "yt", artwork_url: ""}]);
-  setHint("YouTube URL ready — hit Save to download.");
+  // Strip playlist/index params — keep only the video URL
+  let cleanUrl = url;
+  try {
+    const u = new URL(url);
+    const v = u.searchParams.get("v");
+    if (v) cleanUrl = `https://www.youtube.com/watch?v=${v}`;
+  } catch (e) {}
+
+  const track = {title: "Resolving…", artist: "", url: cleanUrl, source: "yt", artwork_url: ""};
+  renderTracks([track]);
+  setHint("Fetching title…");
+
+  // Resolve real title via preview endpoint (yt-dlp metadata)
+  try {
+    const resp = await fetch(`/preview?source=yt&url=${encodeURIComponent(cleanUrl)}`);
+    const data = await resp.json();
+    if (data.title) {
+      track.title = data.title;
+      track.artist = data.artist || "";
+      // Patch the rendered row in place
+      const titleEl = document.querySelector("#main-track-list .track-item .title");
+      const artistEl = document.querySelector("#main-track-list .track-item .artist");
+      if (titleEl) titleEl.textContent = data.title;
+      if (artistEl) artistEl.textContent = data.artist || "";
+    }
+  } catch (e) {
+    track.title = "YouTube video";
+  }
+  setHint("Ready — hit Save to download.");
 }
 
 // ── Text search (parallel SC + Spotify) ───────────────────────────────────────

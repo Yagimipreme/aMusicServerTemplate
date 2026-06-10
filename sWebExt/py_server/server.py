@@ -735,17 +735,25 @@ def preview():
             return jsonify({"status": "error", "error": "sc not configured"}), 503
 
         if source in ("yt", "unknown") or url:
-            import subprocess
+            import subprocess, json as _json
             query = url if url else f"ytsearch:{artist} {title}"
             try:
                 result = subprocess.run(
-                    [".venv/bin/yt-dlp", "--get-url", "-f", "bestaudio/best", "--no-playlist", query],
-                    capture_output=True, text=True, timeout=15,
+                    [".venv/bin/yt-dlp", "--dump-json", "-f", "bestaudio/best",
+                     "--no-playlist", query],
+                    capture_output=True, text=True, timeout=20,
                     cwd=_PROJECT_ROOT,
                 )
-                stream = result.stdout.strip().splitlines()[0] if result.stdout.strip() else None
-                if stream:
-                    return jsonify({"status": "ok", "stream_url": stream})
+                if result.stdout.strip():
+                    info = _json.loads(result.stdout.strip().splitlines()[0])
+                    stream = info.get("url")
+                    return jsonify({
+                        "status": "ok",
+                        "stream_url": stream,
+                        "title": info.get("title", ""),
+                        "artist": info.get("uploader") or info.get("channel") or "",
+                        "thumbnail": info.get("thumbnail", ""),
+                    })
             except Exception:
                 pass
             return jsonify({"status": "ok", "stream_url": None})
