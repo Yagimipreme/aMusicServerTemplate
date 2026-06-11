@@ -14,9 +14,11 @@ def make_search_fn():
     """Return search_fn(artist_name, n) -> [{"title", "url"}] via yt-dlp flat search."""
     from yt_dlp import YoutubeDL
 
-    def search_fn(artist_name, n):
-        # Append "music" so generic names (Chip, Para …) favour music results over tech/cooking
-        query = f"ytsearch{n}:{artist_name} music"
+    def search_fn(artist_name, n, track_hint=None):
+        # Use the specific Last.fm top-track title when available for a targeted search.
+        # Fall back to "{artist} music" for generic discovery.
+        suffix = track_hint if track_hint else "music"
+        query = f"ytsearch{n}:{artist_name} {suffix}"
         opts = {"quiet": True, "skip_download": True, "extract_flat": "in_playlist"}
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(query, download=False)

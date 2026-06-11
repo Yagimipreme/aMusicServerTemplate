@@ -70,6 +70,23 @@ class Subsonic:
         sim = (sr.get("artistInfo2", {}) or {}).get("similarArtist", []) or []
         return [{"id": s.get("id"), "name": s.get("name")} for s in sim if s.get("name")]
 
+    def get_all_artist_names(self) -> set:
+        """Return a casefold set of all artist names in the Navidrome library."""
+        try:
+            sr = self._call("getArtists.view")
+            index = (sr.get("artists", {}) or {}).get("index", []) or []
+            if isinstance(index, dict):
+                index = [index]
+            names = set()
+            for bucket in index:
+                for artist in (bucket.get("artist", []) or []):
+                    name = (artist.get("name") or "").strip()
+                    if name:
+                        names.add(name.casefold())
+            return names
+        except Exception:
+            return set()
+
     def song_exists(self, artist: str, title: str) -> bool:
         # search3.view is an approximate full-text match (may have false positives); accepted for Phase 1.
         sr = self._call("search3.view", query=f"{artist} {title}",

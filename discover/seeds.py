@@ -5,20 +5,28 @@ logger = logging.getLogger(__name__)
 
 
 def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
-                  lastfm_username: str = "", lastfm_period: str = "1month"):
+                  lastfm_username: str = "", lastfm_period: str = "1month",
+                  lastfm_periods=None):
     """Ranked owned artists to seed discovery (most-played first).
 
     When lastfm_client and lastfm_username are provided, blends Navidrome
     play counts with Last.fm scrobble history:
       - Artists in both sources get a boosted rank (appear in both → front)
+      - Artists appearing in multiple Last.fm periods get further priority
       - Last.fm-only artists fill remaining slots up to `limit`
     If the Last.fm call fails, falls back silently to Navidrome-only.
+
+    lastfm_periods: list of period strings e.g. ["7day", "overall"]. When
+    provided, overrides lastfm_period and fetches each period separately,
+    boosting artists that appear across multiple periods.
     """
     artists = subsonic.get_frequent_artists(size=max(limit, 50))
     nav_artists = artists[:limit]
 
     if not lastfm_client or not lastfm_username:
         return nav_artists
+
+    periods = lastfm_periods if lastfm_periods else [lastfm_period]
 
     try:
         import sys
@@ -27,12 +35,25 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
         if _root not in sys.path:
             sys.path.insert(0, _root)
         from lastfm.seeds import get_top_artists
-        lfm_names = get_top_artists(
-            lastfm_client,
-            lastfm_username,
-            period=lastfm_period,
-            limit=limit,
-        )
+
+        # Fetch each period; track how many periods each artist appears in
+        period_counts: dict = {}   # casefold_name -> count of periods
+        canonical: dict = {}       # casefold_name -> display name
+        for period in periods:
+            names = get_top_artists(lastfm_client, lastfm_username,
+                                    period=period, limit=limit)
+            for name in names:
+                cf = name.casefold()
+                period_counts[cf] = period_counts.get(cf, 0) + 1
+                if cf not in canonical:
+                    canonical[cf] = name
+
+        if not period_counts:
+            return nav_artists
+
+        # Ranked by period_count desc (most cross-period artists first)
+        lfm_ranked = sorted(period_counts.keys(), key=lambda cf: -period_counts[cf])
+        lfm_names = [canonical[cf] for cf in lfm_ranked]
     except Exception:
         logger.warning("discover.seeds: Last.fm fetch failed — using Navidrome seeds only",
                        exc_info=True)

@@ -12,7 +12,7 @@ def resolve_tracks(search_fn, artists, per_artist: int = 1):
     for artist in artists:
         name = artist["name"]
         try:
-            hits = search_fn(name, per_artist)
+            hits = search_fn(name, per_artist, track_hint=artist.get("top_track"))
         except Exception:
             logger.exception("resolve: search failed for %s", name)
             continue

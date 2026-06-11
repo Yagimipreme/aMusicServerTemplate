@@ -15,7 +15,7 @@ def build_deps(tmp_path, owned_titles=()):
         start_scan=lambda: True,
     )
 
-    def search_fn(name, n):
+    def search_fn(name, n, track_hint=None):
         return [{"title": f"{name} hit", "url": f"http://y/{name}"}]
 
     downloaded = []
@@ -25,7 +25,7 @@ def build_deps(tmp_path, owned_titles=()):
         downloaded.append(path)
         return (None, [path])
 
-    state = DiscoverState(path=str(tmp_path / "state.json"), suggested=set())
+    state = DiscoverState(path=str(tmp_path / "state.json"), suggested={})
 
     deps = SimpleNamespace(
         subsonic=subsonic,

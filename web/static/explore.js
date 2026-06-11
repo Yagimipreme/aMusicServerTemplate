@@ -573,6 +573,84 @@ async function pollImportStatus(batchMode) {
   }
 }
 
+// ── Discover tab ──────────────────────────────────────────────────────────────
+
+async function loadDiscoverConfig() {
+  try {
+    const resp = await fetch("/discover/config");
+    const cfg = await resp.json();
+    document.getElementById("dc-weekly-count").value = cfg.weekly_count ?? 30;
+    document.getElementById("dc-per-artist").value   = cfg.per_artist ?? 1;
+    document.getElementById("dc-run-hour").value     = cfg.run_hour ?? 22;
+    const sched = cfg.schedule ?? "daily";
+    document.getElementById("dc-schedule").value = sched;
+    document.getElementById("dc-run-day").value  = cfg.run_day ?? "sunday";
+    document.getElementById("dc-runday-row").style.display = sched === "weekly" ? "" : "none";
+    document.getElementById("dc-ttl").value = cfg.suggested_ttl_days ?? 90;
+    const activePeriods = new Set(cfg.lastfm_periods ?? ["1month", "overall"]);
+    document.querySelectorAll("input[name='lfm-period']").forEach(cb => {
+      cb.checked = activePeriods.has(cb.value);
+    });
+  } catch (e) {
+    discoverStatus("Failed to load settings");
+  }
+}
+
+document.getElementById("dc-schedule").addEventListener("change", e => {
+  document.getElementById("dc-runday-row").style.display =
+    e.target.value === "weekly" ? "" : "none";
+});
+
+document.getElementById("dc-save").addEventListener("click", async () => {
+  const periods = [...document.querySelectorAll("input[name='lfm-period']:checked")]
+    .map(cb => cb.value);
+  const body = {
+    weekly_count:       parseInt(document.getElementById("dc-weekly-count").value, 10),
+    per_artist:         parseInt(document.getElementById("dc-per-artist").value, 10),
+    schedule:           document.getElementById("dc-schedule").value,
+    run_day:            document.getElementById("dc-run-day").value,
+    run_hour:           parseInt(document.getElementById("dc-run-hour").value, 10),
+    lastfm_periods:     periods.length ? periods : ["1month"],
+    suggested_ttl_days: parseInt(document.getElementById("dc-ttl").value, 10),
+  };
+  try {
+    const resp = await fetch("/discover/config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    discoverStatus(data.status === "ok" ? "Saved" : `Error: ${data.error}`);
+  } catch (e) {
+    discoverStatus("Save failed");
+  }
+});
+
+document.getElementById("dc-run").addEventListener("click", async () => {
+  discoverStatus("Starting…");
+  try {
+    const resp = await fetch("/discover/run", {method: "POST"});
+    const data = await resp.json();
+    discoverStatus(data.acquired !== undefined
+      ? `Done — ${data.acquired} track(s) acquired`
+      : `Error: ${data.error ?? data.reason ?? "unknown"}`);
+  } catch (e) {
+    discoverStatus("Run failed");
+  }
+});
+
+function discoverStatus(msg) {
+  const el = document.getElementById("dc-status");
+  if (el) el.textContent = msg;
+}
+
+// Load discover config when the tab is opened
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  if (btn.dataset.tab === "discover") {
+    btn.addEventListener("click", loadDiscoverConfig);
+  }
+});
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function setHint(msg) {

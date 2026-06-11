@@ -4,7 +4,7 @@ import os
 import datetime
 
 from discover.seeds import collect_seeds
-from discover.expand import expand_similar
+from discover.expand import expand_similar, enrich_top_tracks
 from discover.resolve import resolve_tracks
 from discover.dedupe import filter_fresh, track_key
 from discover.acquire import acquire
@@ -16,17 +16,27 @@ _STATE_PATH_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "discover_st
 
 
 def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
-               playlist_name="Weekly Mix"):
+               playlist_name="Weekly Mix", lastfm_client=None,
+               lastfm_username="", lastfm_period="1month", lastfm_periods=None):
     """Run the full pipeline once and (re)build the Weekly Mix playlist.
 
     deps must provide: subsonic, search_fn, download_fn, state, song_dir.
     Returns {"acquired": int, "m3u": path|None}.
     """
-    seeds = collect_seeds(deps.subsonic, limit=seed_limit)
+    seeds = collect_seeds(deps.subsonic, limit=seed_limit,
+                          lastfm_client=lastfm_client,
+                          lastfm_username=lastfm_username,
+                          lastfm_period=lastfm_period,
+                          lastfm_periods=lastfm_periods)
     logger.info("discover: %d seeds", len(seeds))
 
-    artists = expand_similar(deps.subsonic, seeds, per_seed=per_seed)
+    artists = expand_similar(deps.subsonic, seeds, per_seed=per_seed,
+                             lastfm_client=lastfm_client)
     logger.info("discover: %d not-owned similar artists", len(artists))
+
+    if lastfm_client is not None:
+        logger.info("discover: enriching top tracks via Last.fm")
+        enrich_top_tracks(lastfm_client, artists)
 
     candidates = resolve_tracks(deps.search_fn, artists, per_artist=per_artist)
     fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
@@ -80,31 +90,35 @@ def lastfm_is_ready(client, username, cfg):
         total = int((recent.get("recenttracks", {}).get("@attr") or {}).get("total", 0))
         if total < min_scrobbles:
             return False
+    except Exception:
+        logger.warning("discover.engine: lastfm_is_ready scrobble check failed", exc_info=True)
+        return False
 
-        # user.getTopArtists to count unique artists
+    try:
+        # user.getTopArtists to count unique artists (may 500 for very new accounts)
         top = client.call("user.getTopArtists", user=username, period="overall", limit=500)
         artists = top.get("topartists", {}).get("artist", [])
         if not isinstance(artists, list):
             artists = [artists] if artists else []
         if len(artists) < min_artists:
             return False
-
-        # Cache the positive result
-        try:
-            try:
-                with open(state_path, encoding="utf-8") as f:
-                    state = json.load(f)
-            except Exception:
-                state = {}
-            state["lastfm_ready"] = True
-            with open(state_path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-        except Exception:
-            pass
-        return True
     except Exception:
-        logger.warning("discover.engine: lastfm_is_ready check failed", exc_info=True)
-        return False
+        # Last.fm returns 500 for accounts with very few plays — skip artist-count gate
+        logger.info("discover.engine: user.getTopArtists unavailable, skipping artist-count check")
+
+    # Cache the positive result
+    try:
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            state = {}
+        state["lastfm_ready"] = True
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
+    return True
 
 
 def run_mix(deps, cfg):
@@ -117,8 +131,14 @@ def run_mix(deps, cfg):
         playlist_name = disc.get("playlist_name", "Weekly Mix")
         count = disc.get("weekly_count", 30)
         seed_limit = disc.get("seed_artist_count", 20)
+        lastfm_period = disc.get("lastfm_period", "1month")
+        lastfm_periods = disc.get("lastfm_periods") or None
         return run_weekly(deps, count=count, seed_limit=seed_limit,
-                         playlist_name=playlist_name)
+                         playlist_name=playlist_name,
+                         lastfm_client=lastfm_client,
+                         lastfm_username=lastfm_username,
+                         lastfm_period=lastfm_period,
+                         lastfm_periods=lastfm_periods)
     else:
         # Bootstrap path
         playlist_name = disc.get("bootstrap_playlist_name", "Starter Mix")
@@ -131,7 +151,11 @@ def run_mix(deps, cfg):
             deps.state.save(stamp_last_run=True)
             return {"acquired": 0, "m3u": None}
         # reuse the existing expansion/acquire pipeline
-        artists = expand_similar(deps.subsonic, seeds, per_seed=20)
+        artists = expand_similar(deps.subsonic, seeds, per_seed=20,
+                                 lastfm_client=lastfm_client)
+        if lastfm_client is not None:
+            logger.info("discover: enriching top tracks via Last.fm")
+            enrich_top_tracks(lastfm_client, artists)
         candidates = resolve_tracks(deps.search_fn, artists, per_artist=1)
         fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
         acquired_paths = []

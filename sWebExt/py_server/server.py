@@ -103,11 +103,12 @@ def _build_discover_deps():
             logger.warning("[DISCOVER] Last.fm client init failed", exc_info=True)
 
     state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
+    ttl_days = int((cfg.get("discover") or {}).get("suggested_ttl_days", 90))
     return SimpleNamespace(
         subsonic=Subsonic(host, user, pw),
         search_fn=make_search_fn(),
         download_fn=make_download_fn(lambda url: dl_mod.download_url(url, song_dir)),
-        state=load_state(state_path),
+        state=load_state(state_path, ttl_days=ttl_days),
         song_dir=song_dir,
         lastfm_client=lastfm_client,
     )
@@ -567,6 +568,39 @@ def get_playlists():
     playlists = [{"name": p.get("name", ""), "id": p.get("id", ""), "songCount": p.get("songCount", 0)}
                  for p in raw if p.get("name")]
     return jsonify({"status": "ok", "playlists": playlists})
+
+
+_DISCOVER_CONFIG_KEYS = {
+    "weekly_count", "per_artist", "schedule", "run_day", "run_hour",
+    "lastfm_period", "lastfm_periods", "suggested_ttl_days",
+    "manual_seeds", "playlist_name", "bootstrap_playlist_name",
+}
+
+
+@app.route("/discover/config", methods=["GET"])
+def discover_config_get():
+    cfg = _get_config()
+    disc = dict(cfg.get("discover") or {})
+    return jsonify(disc)
+
+
+@app.route("/discover/config", methods=["POST"])
+def discover_config_post():
+    body = request.get_json(force=True, silent=True) or {}
+    updates = {k: v for k, v in body.items() if k in _DISCOVER_CONFIG_KEYS}
+    if not updates:
+        return jsonify({"status": "error", "error": "no valid keys"}), 400
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        disc = cfg.setdefault("discover", {})
+        disc.update(updates)
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        return jsonify({"status": "ok", "discover": disc})
+    except Exception as e:
+        logger.exception("discover_config_post failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @app.route("/discover/run", methods=["POST"])

@@ -40,6 +40,8 @@ def expand_similar(subsonic, seeds, per_seed: int = 20, lastfm_client=None,
     SC user id) and get_related results alongside Last.fm / Navidrome candidates.
     """
     seed_names = {s["name"].casefold() for s in seeds}
+    # When using Last.fm, Navidrome's id==-1 check isn't available — build owned set once.
+    owned_names = subsonic.get_all_artist_names() if lastfm_client is not None else set()
     scores: dict = {}
     canonical: dict = {}
 
@@ -64,7 +66,8 @@ def expand_similar(subsonic, seeds, per_seed: int = 20, lastfm_client=None,
             if not name:
                 continue
             if lastfm_client is not None:
-                if name.casefold() in seed_names:
+                cf = name.casefold()
+                if cf in seed_names or cf in owned_names:
                     continue
             else:
                 if not _is_not_owned(sim):
@@ -75,7 +78,10 @@ def expand_similar(subsonic, seeds, per_seed: int = 20, lastfm_client=None,
             key = name.casefold()
             if key not in canonical:
                 canonical[key] = name
-            scores[key] = scores.get(key, 0) + 1
+            # Last.fm path: accumulate match scores for richer ranking.
+            # Navidrome path: match is absent, treat each co-occurrence as 1.
+            match_val = sim.get("match", 1.0)
+            scores[key] = scores.get(key, 0.0) + match_val
 
     # SC lens: merge followings and related
     if soundcloud_client is not None:
@@ -117,7 +123,24 @@ def _expand_via_lastfm(lastfm_client, artist_name: str) -> list:
             sys.path.insert(0, _root)
         from lastfm.similar import get_similar_artists
         sims = get_similar_artists(lastfm_client, artist_name, limit=100)
-        return [{"name": s["name"], "id": "-1"} for s in sims]
+        return [{"name": s["name"], "id": "-1", "match": s["match"]} for s in sims]
     except Exception:
         logger.warning("expand: Last.fm similar_artists failed for %s", artist_name, exc_info=True)
         return []
+
+
+def enrich_top_tracks(lastfm_client, artists):
+    """Add 'top_track' to each artist dict using Last.fm artist.getTopTracks.
+
+    Used to seed a more targeted YouTube search instead of a blind '{artist} music' query.
+    Artists where the API call fails or returns nothing get top_track=None (search falls back).
+    Rate-limited to 1 req/s by the Last.fm client — adds ~1s per artist.
+    """
+    from lastfm.similar import get_artist_top_tracks
+    for a in artists:
+        try:
+            tracks = get_artist_top_tracks(lastfm_client, a["name"], limit=1)
+            a["top_track"] = tracks[0]["title"] if tracks else None
+        except Exception:
+            a["top_track"] = None
+    return artists

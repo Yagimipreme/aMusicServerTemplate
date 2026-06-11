@@ -7,7 +7,7 @@ def test_track_key_is_normalized():
 
 
 def test_filter_fresh_drops_owned_and_already_suggested():
-    state = DiscoverState(path="/x", suggested={track_key("A", "owned-before")})
+    state = DiscoverState(path="/x", suggested={track_key("A", "owned-before"): "2099-01-01"})
     owned = {("B", "in-library")}
 
     def is_owned(artist, title):
@@ -23,7 +23,7 @@ def test_filter_fresh_drops_owned_and_already_suggested():
 
 
 def test_filter_fresh_dedupes_within_batch():
-    state = DiscoverState(path="/x", suggested=set())
+    state = DiscoverState(path="/x", suggested={})
 
     def is_owned(artist, title):
         return False
