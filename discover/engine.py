@@ -17,7 +17,8 @@ _STATE_PATH_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "discover_st
 
 def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
                playlist_name="Weekly Mix", lastfm_client=None,
-               lastfm_username="", lastfm_period="1month", lastfm_periods=None):
+               lastfm_username="", lastfm_period="1month", lastfm_periods=None,
+               playlist_cap=100):
     """Run the full pipeline once and (re)build the Weekly Mix playlist.
 
     deps must provide: subsonic, search_fn, download_fn, state, song_dir.
@@ -55,7 +56,8 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
 
     m3u = None
     if acquired_paths:
-        m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
+        m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name,
+                               cap=playlist_cap)
         try:
             deps.subsonic.start_scan()
         except Exception:
@@ -133,12 +135,14 @@ def run_mix(deps, cfg):
         seed_limit = disc.get("seed_artist_count", 20)
         lastfm_period = disc.get("lastfm_period", "1month")
         lastfm_periods = disc.get("lastfm_periods") or None
+        playlist_cap = int(disc.get("playlist_cap", 100))
         return run_weekly(deps, count=count, seed_limit=seed_limit,
                          playlist_name=playlist_name,
                          lastfm_client=lastfm_client,
                          lastfm_username=lastfm_username,
                          lastfm_period=lastfm_period,
-                         lastfm_periods=lastfm_periods)
+                         lastfm_periods=lastfm_periods,
+                         playlist_cap=playlist_cap)
     else:
         # Bootstrap path
         playlist_name = disc.get("bootstrap_playlist_name", "Starter Mix")
@@ -170,7 +174,8 @@ def run_mix(deps, cfg):
             deps.state.add(track_key(c["artist"], c["title"]))
         m3u = None
         if acquired_paths:
-            m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name)
+            m3u = write_weekly_mix(deps.song_dir, acquired_paths, name=playlist_name,
+                                   cap=int(disc.get("playlist_cap", 100)))
             try:
                 deps.subsonic.start_scan()
             except Exception:

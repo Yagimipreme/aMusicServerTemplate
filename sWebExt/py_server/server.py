@@ -571,7 +571,7 @@ def get_playlists():
 
 
 _DISCOVER_CONFIG_KEYS = {
-    "weekly_count", "per_artist", "schedule", "run_day", "run_hour",
+    "weekly_count", "per_artist", "playlist_cap", "schedule", "run_day", "run_hour",
     "lastfm_period", "lastfm_periods", "suggested_ttl_days",
     "manual_seeds", "playlist_name", "bootstrap_playlist_name",
 }

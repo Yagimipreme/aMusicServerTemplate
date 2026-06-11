@@ -586,6 +586,7 @@ async function loadDiscoverConfig() {
     document.getElementById("dc-schedule").value = sched;
     document.getElementById("dc-run-day").value  = cfg.run_day ?? "sunday";
     document.getElementById("dc-runday-row").style.display = sched === "weekly" ? "" : "none";
+    document.getElementById("dc-playlist-cap").value = cfg.playlist_cap ?? 100;
     document.getElementById("dc-ttl").value = cfg.suggested_ttl_days ?? 90;
     const activePeriods = new Set(cfg.lastfm_periods ?? ["1month", "overall"]);
     document.querySelectorAll("input[name='lfm-period']").forEach(cb => {
@@ -611,6 +612,7 @@ document.getElementById("dc-save").addEventListener("click", async () => {
     run_day:            document.getElementById("dc-run-day").value,
     run_hour:           parseInt(document.getElementById("dc-run-hour").value, 10),
     lastfm_periods:     periods.length ? periods : ["1month"],
+    playlist_cap:       parseInt(document.getElementById("dc-playlist-cap").value, 10),
     suggested_ttl_days: parseInt(document.getElementById("dc-ttl").value, 10),
   };
   try {
