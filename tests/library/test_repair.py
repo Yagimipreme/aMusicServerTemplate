@@ -111,7 +111,7 @@ def test_stage3_returns_artist_above_score_threshold():
     mock_resp.__enter__ = lambda s: s
     mock_resp.__exit__ = MagicMock(return_value=False)
 
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    with patch("time.sleep"), patch("urllib.request.urlopen", return_value=mock_resp):
         result = _repair_by_musicbrainz("Archangel", min_score=90)
     assert result == "Burial"
 
@@ -122,7 +122,7 @@ def test_stage3_returns_none_below_score_threshold():
     mock_resp.__enter__ = lambda s: s
     mock_resp.__exit__ = MagicMock(return_value=False)
 
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    with patch("time.sleep"), patch("urllib.request.urlopen", return_value=mock_resp):
         result = _repair_by_musicbrainz("Archangel", min_score=90)
     assert result is None
 
@@ -133,13 +133,13 @@ def test_stage3_returns_none_on_empty_recordings():
     mock_resp.__enter__ = lambda s: s
     mock_resp.__exit__ = MagicMock(return_value=False)
 
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    with patch("time.sleep"), patch("urllib.request.urlopen", return_value=mock_resp):
         result = _repair_by_musicbrainz("unknown track", min_score=90)
     assert result is None
 
 
 def test_stage3_returns_none_on_network_error():
-    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+    with patch("time.sleep"), patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
         result = _repair_by_musicbrainz("any title", min_score=90)
     assert result is None
 
