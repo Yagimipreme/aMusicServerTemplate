@@ -738,7 +738,7 @@ def _download_url(url: str) -> "str | None":
 
 @app.route("/", methods=["GET"])
 def root_get():
-    return jsonify({"status": "ok", "pid": os.getpid(), "cwd": os.getcwd()})
+    return render_template("app.html")
 
 
 @app.route("/", methods=["POST"])

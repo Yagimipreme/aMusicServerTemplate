@@ -26,11 +26,19 @@ def client(app):
     return app.test_client()
 
 
-def test_get_root_returns_ok(client):
+# ── App shell route ───────────────────────────────────────────────────────────
+
+def test_get_root_returns_app_shell(client):
+    """GET / returns app.html with nav-mixes and app.css."""
     resp = client.get("/")
     assert resp.status_code == 200
-    data = json.loads(resp.data)
-    assert data["status"] == "ok"
+    assert b'id="nav-mixes"' in resp.data
+    assert b'app.css' in resp.data
+
+def test_explore_still_accessible(client):
+    """GET /explore still returns 200 (not removed)."""
+    resp = client.get("/explore")
+    assert resp.status_code == 200
 
 
 def test_enrich_status_returns_idle(client):
