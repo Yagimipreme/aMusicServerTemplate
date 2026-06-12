@@ -50,6 +50,43 @@ class Subsonic:
             counts[aid]["play_count"] += pc
         return [counts[aid] for aid in order]
 
+    def get_playlist_artists(self, playlist_name: str) -> list:
+        """Songs from a named playlist → artist list with summed play counts.
+
+        Returns same format as get_frequent_artists so the two are interchangeable.
+        Songs with blank or bracket-style artist tags ([Unknown Artist]) are skipped.
+        Artists are returned sorted by total play count descending.
+        """
+        sr = self._call("getPlaylists.view")
+        playlists = (sr.get("playlists", {}) or {}).get("playlist", []) or []
+        name_cf = playlist_name.casefold()
+        playlist_id = next(
+            (pl["id"] for pl in playlists
+             if (pl.get("name") or "").casefold() == name_cf),
+            None,
+        )
+        if not playlist_id:
+            return []
+        sr2 = self._call("getPlaylist.view", id=playlist_id)
+        songs = (sr2.get("playlist", {}) or {}).get("entry", []) or []
+        counts: dict = {}
+        order: list = []
+        for song in songs:
+            artist = (song.get("artist") or "").strip()
+            if not artist or (artist.startswith("[") and artist.endswith("]")):
+                continue
+            artist_id = song.get("artistId")
+            pc = int(song.get("playCount") or 0)
+            cf = artist.casefold()
+            if cf not in counts:
+                counts[cf] = {"id": artist_id, "name": artist, "play_count": 0}
+                order.append(cf)
+            counts[cf]["play_count"] += pc
+        return sorted(
+            [counts[cf] for cf in order],
+            key=lambda a: -a["play_count"],
+        )
+
     def find_artist_id(self, name: str) -> str | None:
         """Search Navidrome for an artist by name and return their ID, or None."""
         try:

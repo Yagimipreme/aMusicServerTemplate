@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
                   lastfm_username: str = "", lastfm_period: str = "1month",
-                  lastfm_periods=None):
+                  lastfm_periods=None, seed_playlist: str = ""):
     """Ranked owned artists to seed discovery (most-played first).
 
     When lastfm_client and lastfm_username are provided, blends Navidrome
@@ -19,8 +19,14 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
     lastfm_periods: list of period strings e.g. ["7day", "overall"]. When
     provided, overrides lastfm_period and fetches each period separately,
     boosting artists that appear across multiple periods.
+
+    seed_playlist: when set, use songs from this named Navidrome playlist as
+    the play-count source instead of getAlbumList2 (album-level) data.
     """
-    artists = subsonic.get_frequent_artists(size=max(limit, 50))
+    if seed_playlist:
+        artists = subsonic.get_playlist_artists(seed_playlist)
+    else:
+        artists = subsonic.get_frequent_artists(size=max(limit, 50))
     # Normalize play_count to [0, 1] weights; missing/zero play counts get 0.0
     _max_pc = max((a.get("play_count", 0) for a in artists), default=1) or 1
     for a in artists:

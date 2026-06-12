@@ -83,3 +83,58 @@ def test_get_frequent_artists_accumulates_play_counts():
     assert burial["play_count"] == 50
     assert actress["play_count"] == 10
     assert artists[0]["name"] == "Burial"  # first-seen order preserved
+
+
+def _make_playlist_client(playlist_name, songs):
+    """Helper: fake Subsonic that returns a named playlist with given song dicts."""
+    playlists_resp = {"subsonic-response": {"status": "ok", "playlists": {"playlist": [
+        {"id": "pl1", "name": playlist_name},
+    ]}}}
+    playlist_resp = {"subsonic-response": {"status": "ok", "playlist": {"entry": songs}}}
+
+    def fake_fetch(url):
+        if "getPlaylists" in url:
+            return playlists_resp
+        if "getPlaylist" in url:
+            return playlist_resp
+        raise AssertionError(f"unexpected url: {url}")
+
+    return Subsonic("http://nd:4533", "user", "pw", fetch_json=fake_fetch)
+
+
+def test_get_playlist_artists_aggregates_by_artist():
+    songs = [
+        {"artist": "Burial", "artistId": "a1", "playCount": 5},
+        {"artist": "Burial", "artistId": "a1", "playCount": 3},
+        {"artist": "Actress", "artistId": "a2", "playCount": 10},
+    ]
+    c = _make_playlist_client("Most Played", songs)
+    result = c.get_playlist_artists("Most Played")
+    names = [a["name"] for a in result]
+    assert "Burial" in names
+    assert "Actress" in names
+    burial = next(a for a in result if a["name"] == "Burial")
+    assert burial["play_count"] == 8
+    # sorted by play_count desc
+    assert result[0]["name"] == "Actress"
+
+
+def test_get_playlist_artists_returns_empty_for_unknown_playlist():
+    playlists_resp = {"subsonic-response": {"status": "ok", "playlists": {"playlist": [
+        {"id": "pl1", "name": "Other Playlist"},
+    ]}}}
+    c = Subsonic("http://nd:4533", "u", "p",
+                 fetch_json=lambda url: playlists_resp)
+    assert c.get_playlist_artists("Most Played") == []
+
+
+def test_get_playlist_artists_skips_blank_and_unknown_artists():
+    songs = [
+        {"artist": "", "artistId": None, "playCount": 5},
+        {"artist": "[Unknown Artist]", "artistId": "x", "playCount": 3},
+        {"artist": "Kobosil", "artistId": "a3", "playCount": 2},
+    ]
+    c = _make_playlist_client("Mix", songs)
+    result = c.get_playlist_artists("Mix")
+    assert len(result) == 1
+    assert result[0]["name"] == "Kobosil"

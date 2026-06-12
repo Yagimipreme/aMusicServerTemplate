@@ -53,3 +53,26 @@ def test_collect_seeds_attaches_weight_from_play_count():
 
     assert burial["weight"] == pytest.approx(1.0)
     assert actress["weight"] == pytest.approx(0.5)
+
+
+def test_collect_seeds_uses_playlist_when_seed_playlist_set():
+    """When seed_playlist is set, get_playlist_artists is called instead of get_frequent_artists."""
+    import pytest
+    playlist_songs = [
+        {"id": "a1", "name": "Kobosil", "play_count": 12},
+        {"id": "a2", "name": "Vatican Shadow", "play_count": 8},
+    ]
+
+    class FakeSubWithPlaylist:
+        def get_frequent_artists(self, size=50):
+            raise AssertionError("should not be called when seed_playlist is set")
+
+        def get_playlist_artists(self, playlist_name):
+            assert playlist_name == "Most Played"
+            return playlist_songs
+
+    seeds = collect_seeds(FakeSubWithPlaylist(), limit=10, seed_playlist="Most Played")
+    assert len(seeds) == 2
+    assert seeds[0]["name"] == "Kobosil"
+    assert seeds[0]["weight"] == pytest.approx(1.0)
+    assert seeds[1]["weight"] == pytest.approx(8 / 12)

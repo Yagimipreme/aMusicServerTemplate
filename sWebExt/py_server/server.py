@@ -630,6 +630,7 @@ _DISCOVER_CONFIG_KEYS = {
     "lastfm_period", "lastfm_periods", "suggested_ttl_days",
     "manual_seeds", "playlist_name", "bootstrap_playlist_name",
     "min_artist_listeners", "candidate_oversample", "yt_oversample", "junk_keywords",
+    "seed_playlist",
 }
 
 

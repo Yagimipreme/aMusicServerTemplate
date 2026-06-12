@@ -19,7 +19,7 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
                playlist_name="Weekly Mix", lastfm_client=None,
                lastfm_username="", lastfm_period="1month", lastfm_periods=None,
                playlist_cap=100, min_artist_listeners=5000,
-               candidate_oversample=3):
+               candidate_oversample=3, seed_playlist=""):
     """Run the full pipeline once and (re)build the Weekly Mix playlist.
 
     deps must provide: subsonic, search_fn, download_fn, state, song_dir.
@@ -29,7 +29,8 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
                           lastfm_client=lastfm_client,
                           lastfm_username=lastfm_username,
                           lastfm_period=lastfm_period,
-                          lastfm_periods=lastfm_periods)
+                          lastfm_periods=lastfm_periods,
+                          seed_playlist=seed_playlist)
     logger.info("discover: %d seeds", len(seeds))
 
     artists = expand_similar(deps.subsonic, seeds, per_seed=per_seed,
@@ -143,6 +144,7 @@ def run_mix(deps, cfg):
         playlist_cap = int(disc.get("playlist_cap", 100))
         min_artist_listeners = int(disc.get("min_artist_listeners", 5000))
         candidate_oversample = int(disc.get("candidate_oversample", 3))
+        seed_playlist = disc.get("seed_playlist", "")
         return run_weekly(deps, count=count, seed_limit=seed_limit,
                          playlist_name=playlist_name,
                          lastfm_client=lastfm_client,
@@ -151,7 +153,8 @@ def run_mix(deps, cfg):
                          lastfm_periods=lastfm_periods,
                          playlist_cap=playlist_cap,
                          min_artist_listeners=min_artist_listeners,
-                         candidate_oversample=candidate_oversample)
+                         candidate_oversample=candidate_oversample,
+                         seed_playlist=seed_playlist)
     else:
         # Bootstrap path
         playlist_name = disc.get("bootstrap_playlist_name", "Starter Mix")

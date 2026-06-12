@@ -34,7 +34,8 @@
     "yt_oversample": 5,
     "junk_keywords": [],
     "min_artist_listeners": 5000,
-    "candidate_oversample": 3
+    "candidate_oversample": 3,
+    "seed_playlist": ""
   },
   "repair": {
     "enabled": true,
