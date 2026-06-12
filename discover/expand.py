@@ -81,7 +81,8 @@ def expand_similar(subsonic, seeds, per_seed: int = 20, lastfm_client=None,
             # Last.fm path: accumulate match scores for richer ranking.
             # Navidrome path: match is absent, treat each co-occurrence as 1.
             match_val = sim.get("match", 1.0)
-            scores[key] = scores.get(key, 0.0) + match_val
+            seed_weight = seed.get("weight", 1.0)
+            scores[key] = scores.get(key, 0.0) + match_val * seed_weight
 
     # SC lens: merge followings and related
     if soundcloud_client is not None:

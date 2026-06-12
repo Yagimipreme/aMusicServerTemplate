@@ -47,3 +47,36 @@ def test_expand_with_soundcloud_client_merges_sc_candidates():
 
     names = [r["name"] for r in result]
     assert "Shackleton" in names
+
+
+def test_expand_similar_uses_seed_weight():
+    """A similar artist linked to a high-weight seed should score higher."""
+    import discover.expand as expand_mod
+
+    class FakeSub:
+        def get_frequent_artists(self, size):
+            return []
+        def get_all_artist_names(self):
+            return set()
+
+    seeds = [
+        {"id": "-1", "name": "HeavySeed", "weight": 1.0},
+        {"id": "-1", "name": "LightSeed", "weight": 0.1},
+    ]
+
+    original = expand_mod._expand_via_lastfm
+
+    def fake_expand(client, artist_name):
+        if artist_name == "HeavySeed":
+            return [{"name": "TargetArtist", "id": "-1", "match": 0.9}]
+        return [{"name": "WeakTarget", "id": "-1", "match": 0.9}]
+
+    expand_mod._expand_via_lastfm = fake_expand
+    try:
+        result = expand_mod.expand_similar(FakeSub(), seeds, lastfm_client=object())
+    finally:
+        expand_mod._expand_via_lastfm = original
+
+    scores = {a["name"]: a["score"] for a in result}
+    # TargetArtist: 0.9×1.0 = 0.9; WeakTarget: 0.9×0.1 = 0.09
+    assert scores["TargetArtist"] > scores["WeakTarget"]
