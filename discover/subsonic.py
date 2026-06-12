@@ -175,6 +175,26 @@ class Subsonic:
                         songCount=count, albumCount=0, artistCount=0)
         return (sr.get("searchResult3", {}) or {}).get("song", []) or []
 
+    def get_genres(self) -> list:
+        """[{'name': str, 'songCount': int}] sorted by songCount desc."""
+        sr = self._call("getGenres.view")
+        raw = ((sr.get("genres") or {}).get("genre")) or []
+        if isinstance(raw, dict):
+            raw = [raw]
+        out = [{"name": g.get("value") or g.get("name") or "",
+                "songCount": int(g.get("songCount") or 0)} for g in raw]
+        return sorted([g for g in out if g["name"]], key=lambda g: -g["songCount"])
+
+    def get_songs_by_genre(self, genre: str, count: int = 200) -> list:
+        """Return songs for a genre tag: [{'id','artist','title','path','played'}]."""
+        sr = self._call("getSongsByGenre.view", genre=genre, count=count)
+        raw = ((sr.get("songsByGenre") or {}).get("song")) or []
+        if isinstance(raw, dict):
+            raw = [raw]
+        return [{"id": s.get("id"), "artist": s.get("artist", ""),
+                 "title": s.get("title", ""), "path": s.get("path", ""),
+                 "played": s.get("played")} for s in raw]
+
     def start_scan(self) -> bool:
         sr = self._call("startScan.view")
         return sr.get("status") == "ok"
