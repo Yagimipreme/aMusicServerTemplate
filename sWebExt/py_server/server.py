@@ -629,6 +629,7 @@ _DISCOVER_CONFIG_KEYS = {
     "weekly_count", "per_artist", "playlist_cap", "schedule", "run_day", "run_hour",
     "lastfm_period", "lastfm_periods", "suggested_ttl_days",
     "manual_seeds", "playlist_name", "bootstrap_playlist_name",
+    "min_artist_listeners", "candidate_oversample", "yt_oversample", "junk_keywords",
 }
 
 
@@ -1019,7 +1020,10 @@ def import_tracks():
                 song_ids = []
                 for i, track in enumerate(tracks):
                     if job["tracks"][i]["status"] == "done":
-                        results = sub3.search_songs(track.get("title",""), track.get("artist",""), count=1)
+                        results = sub3.search_songs(
+                            f"{track.get('title', '')} {track.get('artist', '')}".strip(),
+                            count=1,
+                        )
                         if results:
                             song_ids.append(results[0].get("id"))
                 if song_ids:

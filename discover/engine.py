@@ -198,11 +198,12 @@ def run_mix_from_config(project_root: str):
     """Build a Deps object from config.json at project_root and call run_mix().
     Used by --generate-mix CLI and the Starter Mix background trigger."""
     import sys
+    import importlib.util
     sys.path.insert(0, project_root)
     from discover.config import load_config
     from discover.subsonic import Subsonic
     from discover.state import DiscoverState
-    from discover import ytdlp_adapter
+    from discover.ytdlp_adapter import make_search_fn, make_download_fn
     cfg = load_config(os.path.join(project_root, "config.json"))
     disc = cfg.get("discover") or {}
     if not disc.get("enabled", True):
@@ -213,8 +214,14 @@ def run_mix_from_config(project_root: str):
     if not host:
         return {"acquired": 0, "m3u": None, "reason": "navidrome_url not set"}
     subsonic = Subsonic(host, user, pw)
+
+    dl_path = os.path.join(project_root, "scripts/sTownload/script_web.py")
+    spec = importlib.util.spec_from_file_location("sTownload_web", dl_path)
+    dl_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl_mod)
+    song_dir = dl_mod.get_config_song_dir()
+
     state = DiscoverState(os.path.join(project_root, "discover_state.json"))
-    song_dir = cfg.get("song_dir", "")
 
     lastfm_client = None
     lfm_key = cfg.get("lastfm_api_key", "")
@@ -225,14 +232,17 @@ def run_mix_from_config(project_root: str):
         except Exception:
             pass
 
+    _oversample = int(disc.get("yt_oversample", 5))
+    _extra_junk = frozenset(disc.get("junk_keywords", []))
+
     class Deps:
         pass
     deps = Deps()
     deps.subsonic = subsonic
     deps.state = state
     deps.song_dir = song_dir
-    deps.search_fn = ytdlp_adapter.search
-    deps.download_fn = ytdlp_adapter.download
+    deps.search_fn = make_search_fn(oversample=_oversample, extra_junk_keywords=_extra_junk)
+    deps.download_fn = make_download_fn(lambda url: dl_mod.download_url(url, song_dir))
     deps.lastfm_client = lastfm_client
 
     return run_mix(deps, cfg)

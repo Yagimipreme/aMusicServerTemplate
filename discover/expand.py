@@ -176,19 +176,3 @@ def enrich_artist_info(lastfm_client, artists, min_listeners: int = 5000):
 
     return enriched
 
-
-def enrich_top_tracks(lastfm_client, artists):
-    """Add 'top_track' to each artist dict using Last.fm artist.getTopTracks.
-
-    Used to seed a more targeted YouTube search instead of a blind '{artist} music' query.
-    Artists where the API call fails or returns nothing get top_track=None (search falls back).
-    Rate-limited to 1 req/s by the Last.fm client — adds ~1s per artist.
-    """
-    from lastfm.similar import get_artist_top_tracks
-    for a in artists:
-        try:
-            tracks = get_artist_top_tracks(lastfm_client, a["name"], limit=1)
-            a["top_track"] = tracks[0]["title"] if tracks else None
-        except Exception:
-            a["top_track"] = None
-    return artists
