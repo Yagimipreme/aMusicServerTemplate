@@ -128,40 +128,40 @@ def _build_discover_deps():
 
 
 def _run_discover_once():
+    """Legacy wrapper: runs the 'weekly' profile via _run_profile_once."""
     try:
-        deps = _build_discover_deps()
-        if deps is None:
-            return {"status": "disabled", "reason": "navidrome creds missing"}
-        from discover.engine import run_mix
-        cfg = {}
-        try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception:
-            pass
-        result = run_mix(deps, cfg)
-        logger.info("[DISCOVER] run complete: %s", result)
-        return {"status": "ok", **result}
+        mixes = _load_mixes()
+        profile = next((m for m in mixes if m.get("id") == "weekly"), None)
+        if profile is None:
+            # Fall back to run_mix for bootstrap path (no weekly profile in config)
+            deps = _build_discover_deps()
+            if deps is None:
+                return {"status": "disabled", "reason": "navidrome creds missing"}
+            from discover.engine import run_mix
+            cfg = _get_config()
+            result = run_mix(deps, cfg)
+            logger.info("[DISCOVER] run complete: %s", result)
+            return {"status": "ok", **result}
+        result = _run_profile_once(profile)
+        if result.get("status") not in ("busy", "disabled", "error"):
+            return {"status": "ok", **result}
+        return result
     except Exception as e:
         logger.exception("[DISCOVER] run failed")
         return {"status": "error", "error": str(e)}
 
 
 def _run_discover_daily_once():
+    """Legacy wrapper: runs the 'daily' profile via _run_profile_once."""
     try:
-        deps = _build_discover_deps()
-        if deps is None:
+        mixes = _load_mixes()
+        profile = next((m for m in mixes if m.get("id") == "daily"), None)
+        if profile is None:
             return {"status": "disabled", "reason": "navidrome creds missing"}
-        from discover.engine import run_daily
-        cfg = {}
-        try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception:
-            pass
-        result = run_daily(deps, cfg)
-        logger.info("[DISCOVER-DAILY] run complete: %s", result)
-        return {"status": "ok", **result}
+        result = _run_profile_once(profile)
+        if result.get("status") not in ("busy", "disabled", "error"):
+            return {"status": "ok", **result}
+        return result
     except Exception as e:
         logger.exception("[DISCOVER-DAILY] run failed")
         return {"status": "error", "error": str(e)}
@@ -1038,6 +1038,93 @@ def settings_post():
     # Exclude paths where value is None (empty secrets that were skipped)
     actually_updated = [path for path, value in coerced.items() if value is not None]
     return jsonify({"status": "ok", "updated": actually_updated})
+
+
+# ── /mixes routes ─────────────────────────────────────────────────────────────
+
+@app.route("/mixes", methods=["GET"])
+def mixes_get():
+    mixes = _load_mixes()
+    state = {}
+    try:
+        with open(os.path.join(_PROJECT_ROOT, "discover_state.json"), encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        pass
+    return jsonify({"mixes": mixes, "next_runs": state.get("next_runs", {})})
+
+
+@app.route("/mixes", methods=["POST"])
+def mixes_post():
+    from discover.profiles import validate_profile
+    body = request.get_json(force=True, silent=True) or {}
+    cfg = _get_config()
+    mixes = _load_mixes()
+    idx = next((i for i, m in enumerate(mixes) if m["id"] == body.get("id")), None)
+    others = [m for i, m in enumerate(mixes) if i != idx]
+    errors = validate_profile(body, existing=others if idx is None else others)
+    if errors:
+        return jsonify({"status": "error", "errors": errors}), 400
+    body["auto_generated"] = False if idx is not None else bool(body.get("auto_generated"))
+    if idx is None:
+        mixes.append(body)
+        code = 201
+    else:
+        mixes[idx] = body
+        code = 200
+    cfg["mixes"] = mixes
+    _atomic_write_config(cfg)
+    _mix_wake.set()
+    return jsonify({"status": "ok", "mix": body}), code
+
+
+@app.route("/mixes/<mix_id>", methods=["DELETE"])
+def mixes_delete(mix_id):
+    cfg = _get_config()
+    mixes = _load_mixes()
+    idx = next((i for i, m in enumerate(mixes) if m["id"] == mix_id), None)
+    if idx is None:
+        return jsonify({"status": "error", "error": f"mix {mix_id!r} not found"}), 404
+    removed = mixes.pop(idx)
+    cfg["mixes"] = mixes
+    _atomic_write_config(cfg)
+    _mix_wake.set()
+    return jsonify({"status": "ok", "removed": removed["id"]})
+
+
+@app.route("/mixes/<mix_id>/run", methods=["POST"])
+def mixes_run(mix_id):
+    mixes = _load_mixes()
+    profile = next((m for m in mixes if m["id"] == mix_id), None)
+    if profile is None:
+        return jsonify({"status": "error", "error": f"mix {mix_id!r} not found"}), 404
+    result = _run_profile_once(profile)
+    if result.get("status") == "busy":
+        return jsonify(result), 409
+    return jsonify(result)
+
+
+@app.route("/mixes/suggest", methods=["POST"])
+def mixes_suggest():
+    cfg = _get_config()
+    mixes = _load_mixes()
+    deps = _build_discover_deps()
+    if deps is None:
+        return jsonify({"status": "disabled", "reason": "navidrome creds missing"}), 503
+    try:
+        from discover.profiles import suggest_genre_profiles
+        new_profiles = suggest_genre_profiles(deps.subsonic, mixes)
+        # Append only profiles not already in mixes (by id)
+        existing_ids = {m["id"] for m in mixes}
+        added = [p for p in new_profiles if p["id"] not in existing_ids]
+        mixes.extend(added)
+        cfg["mixes"] = mixes
+        _atomic_write_config(cfg)
+        _mix_wake.set()
+        return jsonify({"status": "ok", "created": added})
+    except Exception as e:
+        logger.exception("[MIXES] suggest failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 # ── Explore UI ────────────────────────────────────────────────────────────────
