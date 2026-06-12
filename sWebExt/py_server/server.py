@@ -65,6 +65,11 @@ _sc_client_ready = False
 _enrich_running = threading.Lock()
 _enrich_last_result: dict = {"status": "idle"}
 
+# ── Repair state ──────────────────────────────────────────────────────────────
+
+_repair_running = threading.Lock()
+_repair_last_result: dict = {"status": "idle"}
+
 # ── Dedup state ───────────────────────────────────────────────────────────────
 
 _dedup_running = threading.Lock()
@@ -345,6 +350,53 @@ def _run_enrich_once(limit=None) -> dict:
         return result
     finally:
         _enrich_running.release()
+
+
+def _run_repair_once(limit=None) -> dict:
+    global _repair_last_result
+    if not _repair_running.acquire(blocking=False):
+        return {"status": "skipped", "reason": "already running"}
+    try:
+        from discover.config import load_config
+        cfg = load_config(_CONFIG_PATH)
+        song_dir = cfg.get("song_dir", "")
+        if not song_dir:
+            result = {"status": "disabled", "reason": "song_dir not set"}
+            _repair_last_result = result
+            return result
+
+        repair_cfg = cfg.get("repair") or {}
+        min_lfm = int(repair_cfg.get("min_lastfm_listeners", 10000))
+        min_mb = int(repair_cfg.get("min_musicbrainz_score", 90))
+
+        lastfm_client = None
+        api_key = cfg.get("lastfm_api_key", "")
+        if api_key:
+            try:
+                from lastfm.client import LastFMClient
+                lastfm_client = LastFMClient(api_key)
+            except Exception:
+                logger.warning("[REPAIR] Last.fm client init failed", exc_info=True)
+
+        from library.repair import repair_missing_artists
+        result = repair_missing_artists(
+            song_dir,
+            lastfm_client=lastfm_client,
+            min_lastfm_listeners=min_lfm,
+            min_musicbrainz_score=min_mb,
+            limit=limit or 0,
+        )
+        result["status"] = "ok"
+        logger.info("[REPAIR] complete: %s", result)
+        _repair_last_result = result
+        return result
+    except Exception as e:
+        logger.exception("[REPAIR] failed")
+        result = {"status": "error", "error": str(e)}
+        _repair_last_result = result
+        return result
+    finally:
+        _repair_running.release()
 
 
 def _run_dedup_once(force_dry_run=False):
@@ -651,6 +703,20 @@ def library_enrich():
 @app.route("/library/enrich/status", methods=["GET"])
 def enrich_status():
     return jsonify(_enrich_last_result)
+
+
+@app.route("/library/repair", methods=["POST"])
+def library_repair():
+    body = request.get_json(force=True, silent=True) or {}
+    limit = body.get("limit", None)
+    t = threading.Thread(target=_run_repair_once, kwargs={"limit": limit}, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/library/repair/status", methods=["GET"])
+def repair_status():
+    return jsonify(_repair_last_result)
 
 
 # ── Explore UI ────────────────────────────────────────────────────────────────
