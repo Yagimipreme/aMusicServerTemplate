@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1172,6 +1173,32 @@ def mixes_suggest():
     except Exception as e:
         logger.exception("[MIXES] suggest failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── YouTube search ────────────────────────────────────────────────────────────
+
+@app.route("/yt/search", methods=["GET"])
+def yt_search():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"status": "error", "error": "q required"}), 400
+    limit = max(1, min(25, int(request.args.get("limit", 10))))
+    try:
+        proc = subprocess.run(
+            ["yt-dlp", "--flat-playlist", "-J", f"ytsearch{limit}:{q}"],
+            capture_output=True, text=True, timeout=10)
+        data = json.loads(proc.stdout or "{}")
+        results = [{
+            "source": "yt",
+            "title": e.get("title") or "",
+            "artist": e.get("uploader") or e.get("channel") or "",
+            "duration": e.get("duration"),
+            "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id','')}",
+        } for e in (data.get("entries") or []) if e]
+        return jsonify({"results": results})
+    except Exception as e:
+        logger.warning("yt_search failed", exc_info=True)
+        return jsonify({"results": [], "error": str(e)})
 
 
 # ── Explore UI ────────────────────────────────────────────────────────────────

@@ -699,3 +699,46 @@ def test_run_discover_once_falls_back_to_run_mix_when_profile_skipped(client, tm
     assert len(run_mix_calls) == 1, "run_mix should be called as fallback"
     data = _json.loads(resp.data)
     assert data.get("status") == "ok"
+
+
+# ── /yt/search route ─────────────────────────────────────────────────────────
+
+def test_yt_search_missing_q_returns_400(client):
+    """GET /yt/search without q → 400."""
+    resp = client.get("/yt/search")
+    assert resp.status_code == 400
+    data = json.loads(resp.data)
+    assert data["status"] == "error"
+    assert "q" in data["error"]
+
+def test_yt_search_happy_path(client):
+    """GET /yt/search with q → 200 with results list."""
+    fake_stdout = json.dumps({
+        "entries": [
+            {"title": "Test Track", "uploader": "Test Artist", "duration": 240,
+             "url": "https://www.youtube.com/watch?v=abc123", "id": "abc123"},
+        ]
+    })
+    import subprocess as _sp
+    mock_result = _sp.CompletedProcess(args=[], returncode=0, stdout=fake_stdout, stderr="")
+    with patch("subprocess.run", return_value=mock_result):
+        resp = client.get("/yt/search?q=test")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert "results" in data
+    assert len(data["results"]) == 1
+    r = data["results"][0]
+    assert r["source"] == "yt"
+    assert r["title"] == "Test Track"
+    assert r["artist"] == "Test Artist"
+    assert r["duration"] == 240
+    assert "youtube.com" in r["url"]
+
+def test_yt_search_subprocess_error_returns_empty_not_500(client):
+    """GET /yt/search when subprocess raises → 200 with empty results + error field."""
+    with patch("subprocess.run", side_effect=Exception("yt-dlp not found")):
+        resp = client.get("/yt/search?q=test")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["results"] == []
+    assert "error" in data
