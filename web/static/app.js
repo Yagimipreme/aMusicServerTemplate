@@ -954,6 +954,236 @@ async function renderSearch() {
   input.onkeydown = e => { if (e.key === 'Enter') onGo(); };
 }
 
+// ── Setup screen ──────────────────────────────────────────────────────────────
+
+async function renderSetup() {
+  const el = document.getElementById('s-setup');
+  el.textContent = '';
+
+  let schema, values;
+  try {
+    const data = await API('/settings');
+    schema = data.schema;
+    values = data.values;
+  } catch(e) {
+    const err = document.createElement('div');
+    err.className = 'warn';
+    err.textContent = 'Failed to load settings: ' + (e.message || 'unknown');
+    el.appendChild(err);
+    return;
+  }
+
+  // Group entries by group name
+  const groups = {};
+  const groupOrder = [];
+  schema.forEach(entry => {
+    if (!groups[entry.group]) {
+      groups[entry.group] = [];
+      groupOrder.push(entry.group);
+    }
+    groups[entry.group].push(entry);
+  });
+
+  // Credentials warning banner
+  const hasCredentials = groupOrder.includes('Credentials');
+  if (hasCredentials) {
+    const warn = document.createElement('div');
+    warn.className = 'warn';
+    warn.textContent = '⚠ no auth on this page — anyone on your network can change these.';
+    el.appendChild(warn);
+  }
+
+  let firstGroup = true;
+
+  groupOrder.forEach((groupName) => {
+    const entries = groups[groupName];
+    const group = document.createElement('div');
+    group.className = 'sgroup' + (firstGroup ? ' open' : '');
+    firstGroup = false;
+
+    // Header
+    const h3 = document.createElement('h3');
+    const h3Title = document.createElement('span');
+    h3Title.textContent = groupName;
+    const h3Arrow = document.createElement('span');
+    h3Arrow.textContent = group.classList.contains('open') ? '▾' : '▸';
+    h3.appendChild(h3Title);
+    h3.appendChild(h3Arrow);
+    h3.onclick = () => {
+      group.classList.toggle('open');
+      h3Arrow.textContent = group.classList.contains('open') ? '▾' : '▸';
+    };
+    group.appendChild(h3);
+
+    // Rows container
+    const rows = document.createElement('div');
+    rows.className = 'rows';
+
+    // Track original values and input elements for diffing
+    const origValues = {};
+    const inputs = {};
+
+    entries.forEach(entry => {
+      const path = entry.path;
+      const rawVal = values[path];
+
+      const row = document.createElement('div');
+      row.className = 'srow';
+
+      const labelDiv = document.createElement('label');
+      const labelText = document.createElement('span');
+      labelText.textContent = entry.label;
+      labelDiv.appendChild(labelText);
+      if (entry.hint) {
+        const hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = entry.hint;
+        labelDiv.appendChild(hint);
+      }
+      row.appendChild(labelDiv);
+
+      if (entry.type === 'bool') {
+        const sw = document.createElement('span');
+        sw.className = 'sw' + (rawVal ? ' on' : '');
+        sw.onclick = () => sw.classList.toggle('on');
+        inputs[path] = {
+          el: sw,
+          getValue: () => sw.classList.contains('on'),
+        };
+        origValues[path] = !!rawVal;
+        row.appendChild(sw);
+      } else if (entry.type === 'secret') {
+        const inp = document.createElement('input');
+        inp.type = 'password';
+        inp.placeholder = '(unchanged)';
+        inp.value = '';
+        inputs[path] = {
+          el: inp,
+          getValue: () => inp.value,
+        };
+        origValues[path] = '';
+        row.appendChild(inp);
+      } else if (entry.type === 'list[str]') {
+        const inp = document.createElement('textarea');
+        inp.style.cssText = 'background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-family:JetBrains Mono,monospace;font-size:.7rem;padding:8px;border-radius:3px;width:140px;height:60px;resize:vertical';
+        const listVal = Array.isArray(rawVal) ? rawVal.join('\n') : (rawVal || '');
+        inp.value = listVal;
+        inputs[path] = {
+          el: inp,
+          getValue: () => inp.value.split('\n').map(s => s.trim()).filter(Boolean),
+        };
+        origValues[path] = listVal;
+        row.appendChild(inp);
+      } else if (entry.type === 'int') {
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        if (entry.min != null) inp.min = entry.min;
+        if (entry.max != null) inp.max = entry.max;
+        const displayVal = rawVal != null ? String(rawVal) : '';
+        inp.value = displayVal;
+        inputs[path] = {
+          el: inp,
+          getValue: () => {
+            const v = parseInt(inp.value, 10);
+            return isNaN(v) ? inp.value : v;
+          },
+        };
+        origValues[path] = rawVal != null ? rawVal : '';
+        row.appendChild(inp);
+      } else {
+        // str
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        const displayVal = rawVal != null && rawVal !== undefined ? String(rawVal) : '';
+        inp.value = displayVal;
+        inputs[path] = {
+          el: inp,
+          getValue: () => inp.value,
+        };
+        origValues[path] = displayVal;
+        row.appendChild(inp);
+      }
+
+      rows.appendChild(row);
+    });
+
+    // Save button for this group
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'btn ghost';
+    saveBtn.style.margin = '8px 0 4px';
+    saveBtn.textContent = 'save';
+
+    const groupStatus = document.createElement('div');
+    groupStatus.className = 'warn';
+    groupStatus.style.display = 'none';
+
+    saveBtn.onclick = async () => {
+      // Changed-fields-only diffing
+      const changed = {};
+      entries.forEach(entry => {
+        const path = entry.path;
+        const inp = inputs[path];
+        if (!inp) return;
+        const current = inp.getValue();
+        if (entry.type === 'secret') {
+          // Only include if user typed something
+          if (current !== '') changed[path] = current;
+        } else if (entry.type === 'bool') {
+          if (current !== origValues[path]) changed[path] = current;
+        } else if (entry.type === 'list[str]') {
+          const currentStr = Array.isArray(current) ? current.join('\n') : current;
+          if (currentStr !== origValues[path]) changed[path] = current;
+        } else if (entry.type === 'int') {
+          if (JSON.stringify(current) !== JSON.stringify(origValues[path])) changed[path] = current;
+        } else {
+          if (current !== origValues[path]) changed[path] = current;
+        }
+      });
+
+      if (Object.keys(changed).length === 0) {
+        groupStatus.style.display = '';
+        groupStatus.textContent = 'No changes.';
+        setTimeout(() => { groupStatus.style.display = 'none'; }, 2000);
+        return;
+      }
+
+      saveBtn.disabled = true;
+      groupStatus.style.display = '';
+      groupStatus.textContent = 'Saving…';
+
+      try {
+        const result = await API('/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(changed)});
+        groupStatus.textContent = 'Saved: ' + (result.updated || []).join(', ');
+        // Update origValues for non-secret fields
+        entries.forEach(entry => {
+          if (entry.type !== 'secret' && changed[entry.path] !== undefined) {
+            if (entry.type === 'list[str]') {
+              origValues[entry.path] = Array.isArray(changed[entry.path]) ? changed[entry.path].join('\n') : changed[entry.path];
+            } else if (entry.type === 'int') {
+              origValues[entry.path] = changed[entry.path];
+            } else {
+              origValues[entry.path] = String(changed[entry.path]);
+            }
+          }
+        });
+      } catch(e) {
+        if (e.body && e.body.fields) {
+          groupStatus.textContent = 'Errors: ' + Object.entries(e.body.fields).map(([k, v]) => k + ': ' + v).join('; ');
+        } else {
+          groupStatus.textContent = 'Save failed: ' + (e.message || 'unknown');
+        }
+      } finally {
+        saveBtn.disabled = false;
+      }
+    };
+
+    rows.appendChild(groupStatus);
+    rows.appendChild(saveBtn);
+    group.appendChild(rows);
+    el.appendChild(group);
+  });
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -961,7 +1191,7 @@ document.addEventListener('DOMContentLoaded', () => {
   screens['mixes']   = {el: document.getElementById('s-mixes'),   render: renderMixes};
   screens['library'] = {el: document.getElementById('s-library'), render: renderLibrary};
   screens['search']  = {el: document.getElementById('s-search'),  render: renderSearch};
-  screens['setup']   = {el: document.getElementById('s-setup'),   render: () => {}};
+  screens['setup']   = {el: document.getElementById('s-setup'),   render: renderSetup};
 
   // Clock
   function updateClock() {
