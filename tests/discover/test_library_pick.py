@@ -154,3 +154,50 @@ def test_genre_mode_error_contributes_nothing():
     profile = make_profile(mode="genre", genres=["badgenre", "ambient"])
     result = select_library_tracks(subsonic, profile, exclude_basenames=set(), count=10)
     assert any(s["id"] == "s1" for s in result)  # ambient songs included
+
+
+# ── Issue 2: seed_artists override for non-genre modes ───────────────────────
+
+def test_history_mode_with_seed_artists_override_uses_injected_artists():
+    """history mode: seed_artists param overrides profile seeds.artists (which is empty).
+
+    Before the fix, select_library_tracks only read seeds.artists for non-genre modes,
+    always finding an empty list for history profiles. After the fix it accepts a
+    seed_artists= kwarg and searches by those artists instead.
+    """
+    songs_found = [make_song("s1", "Boards of Canada", "Roygbiv", "/music/roygbiv.mp3")]
+    searched = []
+
+    def search_songs(query, count=20):
+        searched.append(query)
+        return songs_found
+
+    subsonic = SimpleNamespace(search_songs=search_songs)
+    profile = make_profile(mode="history", artists=[])  # no artists in profile
+    result = select_library_tracks(
+        subsonic, profile, exclude_basenames=set(), count=5,
+        seed_artists=["Boards of Canada", "Aphex Twin"],
+    )
+    assert len(result) > 0, "Expected library tracks via injected seed_artists"
+    assert any("Boards of Canada" in q or "Aphex Twin" in q for q in searched), (
+        "Expected search_songs to be called with injected artist names"
+    )
+
+
+def test_playlist_mode_with_seed_artists_override_uses_injected_artists():
+    """playlist mode: seed_artists param works similarly to history mode."""
+    songs_found = [make_song("s2", "Autechre", "Gantz Graf", "/music/gantz.mp3")]
+    searched = []
+
+    def search_songs(query, count=20):
+        searched.append(query)
+        return songs_found
+
+    subsonic = SimpleNamespace(search_songs=search_songs)
+    profile = make_profile(mode="playlist", playlist="Liked Songs")
+    result = select_library_tracks(
+        subsonic, profile, exclude_basenames=set(), count=5,
+        seed_artists=["Autechre"],
+    )
+    assert len(result) > 0
+    assert any("Autechre" in q for q in searched)

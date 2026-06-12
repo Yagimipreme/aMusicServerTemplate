@@ -43,10 +43,20 @@ def make_cfg():
     }
 
 
-def build_deps(tmp_path, lastfm_ready=True, library_songs=None):
-    """Build fake deps for run_profile tests."""
+def build_deps(tmp_path, lastfm_ready=True, library_songs=None, extra_similar=None):
+    """Build fake deps for run_profile tests.
+
+    extra_similar: additional artist names to include in artist.getSimilar responses,
+    allowing tests to request more fresh candidates than the default 2 (Zmajor, Rushex).
+    """
     # For library picks
     library_songs = library_songs or []
+    extra_similar = extra_similar or []
+    default_similar = [
+        {"name": "Zmajor", "match": "0.9"},
+        {"name": "Rushex", "match": "0.8"},
+    ]
+    all_similar = default_similar + [{"name": n, "match": "0.7"} for n in extra_similar]
 
     subsonic = SimpleNamespace(
         get_frequent_artists=lambda size=50: [{"id": "a1", "name": "BoC", "play_count": 10, "weight": 1.0}],
@@ -76,10 +86,7 @@ def build_deps(tmp_path, lastfm_ready=True, library_songs=None):
         if method == "artist.getInfo":
             return {"artist": {"stats": {"listeners": 999999}}}
         if method == "artist.getSimilar":
-            return {"similarartists": {"artist": [
-                {"name": "Zmajor", "match": "0.9"},
-                {"name": "Rushex", "match": "0.8"},
-            ]}}
+            return {"similarartists": {"artist": all_similar}}
         if method == "artist.getTopTracks":
             artist_name = kwargs.get("artist", "unknown")
             return {"toptracks": {"track": [{"name": f"{artist_name} hit",
@@ -245,7 +252,7 @@ def test_run_profile_returns_expected_keys(tmp_path, monkeypatch):
 # ── shortfall backfill ────────────────────────────────────────────────────────
 
 def test_run_profile_new_shortfall_backfilled_by_library(tmp_path, monkeypatch):
-    """If new share delivers 0 (empty candidates), library may fill the gap."""
+    """If new share delivers 0 (empty candidates), library fills the gap up to count."""
     monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
     library_songs = [
         {"id": f"lib{i}", "artist": "X", "title": f"T{i}",
@@ -258,5 +265,48 @@ def test_run_profile_new_shortfall_backfilled_by_library(tmp_path, monkeypatch):
     profile = make_profile(count=5, cap=20, new_ratio=0.5, mode="genre", genres=["ambient"])
     cfg = make_cfg()
     result = run_profile(deps, cfg, profile)
-    # total ≤ count
-    assert result["acquired"] + result["library_added"] <= 5
+    # Library must backfill the whole count since new-share delivers 0
+    assert result["acquired"] + result["library_added"] == 5, (
+        f"Expected 5 total (library backfill), got acquired={result['acquired']} lib={result['library_added']}"
+    )
+
+
+def test_run_profile_ratio_blend_exact_split(tmp_path, monkeypatch):
+    """ratio 0.3 count 10 → exactly 3 new + 7 library when both shares deliver."""
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    library_songs = [
+        {"id": f"lib{i}", "artist": "X", "title": f"T{i}",
+         "path": str(tmp_path / f"lib{i}.mp3"), "played": None}
+        for i in range(20)
+    ]
+    # Use a fake that returns 3 distinct similar artists (Zmajor, Rushex, Nextra)
+    deps, downloaded = build_deps(tmp_path, library_songs=library_songs, extra_similar=["Nextra"])
+    profile = make_profile(count=10, cap=50, new_ratio=0.3, mode="genre", genres=["techno"])
+    cfg = make_cfg()
+    result = run_profile(deps, cfg, profile)
+    # new_count = round(10 * 0.3) = 3; lib_count = 7
+    assert result["acquired"] == 3, f"Expected 3 acquired, got {result['acquired']}"
+    assert result["library_added"] == 7, f"Expected 7 library, got {result['library_added']}"
+
+
+def test_run_profile_library_shortfall_backfilled_by_acquisition(tmp_path, monkeypatch):
+    """If library underdelivers, fresh candidates may fill the gap up to count (spec §3b)."""
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    # Only 1 library song available but library share expects 7 (ratio 0.3 count 10)
+    library_songs = [
+        {"id": "lib0", "artist": "X", "title": "T0",
+         "path": str(tmp_path / "lib0.mp3"), "played": None}
+    ]
+    # Need enough similar artists to backfill 6 more (3 default + 6 extra = 9 candidates)
+    extra = [f"ExtraArtist{i}" for i in range(7)]
+    deps, downloaded = build_deps(tmp_path, library_songs=library_songs, extra_similar=extra)
+    profile = make_profile(count=10, cap=50, new_ratio=0.3, mode="genre", genres=["techno"])
+    cfg = make_cfg()
+    result = run_profile(deps, cfg, profile)
+    total = result["acquired"] + result["library_added"]
+    # Total must be 10 (acquisition backfills library shortfall of 6)
+    assert total == 10, (
+        f"Expected 10 total (acquisition backfill), got acquired={result['acquired']} lib={result['library_added']}"
+    )
+    assert result["library_added"] == 1  # only 1 library track available
+    assert result["acquired"] == 9  # 3 original + 6 backfill

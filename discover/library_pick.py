@@ -7,13 +7,15 @@ logger = logging.getLogger(__name__)
 
 
 def select_library_tracks(subsonic, profile: dict, exclude_basenames: set,
-                          count: int) -> list:
+                          count: int, seed_artists: list | None = None) -> list:
     """Return up to `count` song dicts (with 'path') from the library.
 
     genre mode: union of get_songs_by_genre per genre.
-    other modes: songs by the profile's seed artists (search3 via subsonic.search_songs
-    if available, else empty). Prefers never/least-recently played. Excludes basenames
-    already in the playlist. Never touches DiscoverState.
+    other modes: songs by seed artists. seed_artists (if provided) overrides
+    profile seeds.artists — used by run_profile to pass the dynamically-computed
+    seed list for history/playlist modes (which have no static artists list).
+    Prefers never/least-recently played. Excludes basenames already in the
+    playlist. Never touches DiscoverState.
     """
     if count <= 0:
         return []
@@ -31,9 +33,11 @@ def select_library_tracks(subsonic, profile: dict, exclude_basenames: set,
                     seen_ids.add(s["id"])
                     pool.append(s)
     else:
+        # Use injected seed_artists when provided (history/playlist modes pass computed seeds)
+        artists_to_search = seed_artists if seed_artists is not None else (seeds_cfg.get("artists") or [])
         search = getattr(subsonic, "search_songs", None)
         if callable(search):
-            for a in (seeds_cfg.get("artists") or [])[:20]:
+            for a in artists_to_search[:20]:
                 try:
                     for s in search(a, count=20):
                         if s.get("id") and s["id"] not in seen_ids:

@@ -217,6 +217,8 @@ def run_profile(deps, cfg, profile):
     lastfm_username = cfg.get("lastfm_username", "")
 
     acquired_paths = []
+    seed_artist_names: list | None = None   # injected into library share for non-genre modes
+    fresh_remaining: list = []              # unused fresh candidates kept for acquisition backfill
     if new_count > 0:
         seeds = []
         if mode == "history":
@@ -231,24 +233,32 @@ def run_profile(deps, cfg, profile):
                                       lastfm_period=quality.get("lastfm_period", "1month"),
                                       lastfm_periods=quality.get("lastfm_periods") or None,
                                       seed_playlist=seeds_cfg.get("playlist", ""))
+                seed_artist_names = [s["name"] for s in seeds if s.get("name")]
         elif mode == "genre":
             seeds = genre_seed_artists(lastfm_client, seeds_cfg.get("genres") or []) if lastfm_client else []
         elif mode == "manual":
             seeds = [{"id": "-1", "name": a} for a in seeds_cfg.get("artists") or []]
+            seed_artist_names = seeds_cfg.get("artists") or []
         elif mode == "playlist":
             seeds = collect_seeds(deps.subsonic, limit=int(quality.get("seed_artist_count", 20)),
                                   lastfm_client=lastfm_client, lastfm_username=lastfm_username,
                                   seed_playlist=seeds_cfg.get("playlist", ""))
+            seed_artist_names = [s["name"] for s in seeds if s.get("name")]
         if new_count > 0 and seeds:
+            oversample = int(quality.get("candidate_oversample", 3))
             artists = expand_similar(deps.subsonic, seeds, per_seed=20, lastfm_client=lastfm_client)
             if lastfm_client is not None:
-                artists = sorted(artists, key=lambda a: -a.get("score", 0))[:60]
+                k = int(quality.get("seed_artist_count", 20)) * oversample
+                artists = sorted(artists, key=lambda a: -a.get("score", 0))[:k]
                 artists = enrich_artist_info(lastfm_client, artists,
                                              min_listeners=int(quality.get("min_artist_listeners", 5000)))
             candidates = resolve_tracks(deps.search_fn, artists, per_artist=1)
-            fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
-            for c in fresh:
+            fresh_all = list(filter_fresh(deps.subsonic.song_exists, deps.state, candidates))
+            fresh_iter = iter(fresh_all)
+            for c in fresh_iter:
                 if len(acquired_paths) >= new_count:
+                    # keep remaining for backfill
+                    fresh_remaining = [c] + list(fresh_iter)
                     break
                 paths = acquire(deps.download_fn, c)
                 if not paths:
@@ -263,8 +273,23 @@ def run_profile(deps, cfg, profile):
     if lib_needed > 0:
         existing = _existing_playlist_basenames(deps.song_dir, profile["name"])
         from discover.library_pick import select_library_tracks
-        picks = select_library_tracks(deps.subsonic, profile, existing, lib_needed)
+        picks = select_library_tracks(deps.subsonic, profile, existing, lib_needed,
+                                      seed_artists=seed_artist_names)
         lib_paths = [s["path"] for s in picks]
+
+    # acquisition backfill: if library underdelivered, acquire more from fresh pool (spec §3b)
+    lib_shortfall = lib_needed - len(lib_paths)
+    if lib_shortfall > 0 and fresh_remaining:
+        for c in fresh_remaining:
+            if len(acquired_paths) + len(lib_paths) >= count:
+                break
+            paths = acquire(deps.download_fn, c)
+            if not paths:
+                continue
+            acquired_paths.extend(paths[:lib_shortfall - (len(acquired_paths) - (new_count or 0))])
+            deps.state.add(track_key(c["artist"], c["title"]))
+            if len(acquired_paths) + len(lib_paths) >= count:
+                break
 
     m3u = None
     if acquired_paths or lib_paths:
