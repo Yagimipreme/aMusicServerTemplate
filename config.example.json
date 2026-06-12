@@ -30,7 +30,16 @@
     "lastfm_readiness": {
       "min_scrobbles": 100,
       "min_unique_artists": 15
-    }
+    },
+    "yt_oversample": 5,
+    "junk_keywords": [],
+    "min_artist_listeners": 5000,
+    "candidate_oversample": 3
+  },
+  "repair": {
+    "enabled": true,
+    "min_lastfm_listeners": 10000,
+    "min_musicbrainz_score": 90
   },
   "enrich": {
     "enabled": false,
