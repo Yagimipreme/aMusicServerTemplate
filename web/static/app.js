@@ -464,12 +464,302 @@ function buildMixCard(mix, nextRuns, isNew) {
   return card;
 }
 
+// ── Library screen ────────────────────────────────────────────────────────────
+
+async function renderLibrary() {
+  const el = document.getElementById('s-library');
+  el.textContent = '';
+
+  // Card builder helper
+  function makeToolCard(title, desc, goLabel, goHandler) {
+    const tool = document.createElement('div');
+    tool.className = 'tool';
+    const name = document.createElement('div');
+    name.className = 't-name';
+    const b = document.createElement('b');
+    b.textContent = title;
+    const span = document.createElement('span');
+    span.textContent = desc;
+    name.appendChild(b);
+    name.appendChild(span);
+    const btn = document.createElement('button');
+    btn.className = 'go';
+    btn.textContent = goLabel;
+    btn.onclick = goHandler;
+    tool.appendChild(name);
+    tool.appendChild(btn);
+    tool._statusSpan = span;
+    tool._btn = btn;
+    return tool;
+  }
+
+  // 1. Enrich metadata
+  let enrichPollTimer = null;
+  const enrichCard = makeToolCard('Enrich metadata', 'tag files with Last.fm genre data', 'run', async () => {
+    enrichCard._btn.disabled = true;
+    try {
+      await API('/library/enrich', {method: 'POST'});
+      pollEnrich();
+    } catch(e) {
+      enrichCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
+      enrichCard._btn.disabled = false;
+    }
+  });
+  // Progress bar
+  const enrichBar = document.createElement('div');
+  enrichBar.className = 'bar';
+  enrichBar.style.display = 'none';
+  const enrichBarInner = document.createElement('i');
+  enrichBarInner.style.width = '0%';
+  enrichBar.appendChild(enrichBarInner);
+  enrichCard.querySelector('.t-name').appendChild(enrichBar);
+
+  function pollEnrich() {
+    if (enrichPollTimer) clearInterval(enrichPollTimer);
+    enrichPollTimer = setInterval(async () => {
+      try {
+        const s = await API('/library/enrich/status');
+        if (s.status === 'running' || s.status === 'started') {
+          enrichCard._btn.textContent = 'view';
+          enrichBar.style.display = '';
+          if (s.files_total && s.files_done !== undefined) {
+            const pct = Math.round(s.files_done / s.files_total * 100);
+            enrichBarInner.style.width = pct + '%';
+            enrichCard._statusSpan.textContent = 'running — ' + s.files_done + ' / ' + s.files_total + ' files';
+          } else {
+            enrichCard._statusSpan.textContent = 'running…';
+          }
+        } else {
+          clearInterval(enrichPollTimer);
+          enrichPollTimer = null;
+          enrichCard._btn.disabled = false;
+          enrichCard._btn.textContent = 'run';
+          enrichBar.style.display = 'none';
+          if (s.status === 'ok' && s.enriched !== undefined) {
+            enrichCard._statusSpan.textContent = 'last run: ' + s.enriched + ' enriched';
+          } else if (s.status === 'idle') {
+            enrichCard._statusSpan.textContent = 'not run yet';
+          } else {
+            enrichCard._statusSpan.textContent = s.status + (s.reason ? ': ' + s.reason : '');
+          }
+        }
+      } catch(e) { /* ignore poll errors */ }
+    }, 2000);
+  }
+  // Check initial enrich status
+  try {
+    const s = await API('/library/enrich/status');
+    if (s.status === 'running' || s.status === 'started') {
+      pollEnrich();
+    } else if (s.status === 'ok' && s.enriched !== undefined) {
+      enrichCard._statusSpan.textContent = 'last run: ' + s.enriched + ' enriched';
+    } else if (s.status === 'idle') {
+      enrichCard._statusSpan.textContent = 'not run yet';
+    }
+  } catch(e) {}
+  el.appendChild(enrichCard);
+
+  // 2. Repair library
+  let repairPollTimer = null;
+  const repairCard = makeToolCard('Repair library', 'fix missing artist tags via MusicBrainz', 'run', async () => {
+    repairCard._btn.disabled = true;
+    try {
+      await API('/library/repair', {method: 'POST'});
+      pollRepair();
+    } catch(e) {
+      repairCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
+      repairCard._btn.disabled = false;
+    }
+  });
+  const repairBar = document.createElement('div');
+  repairBar.className = 'bar';
+  repairBar.style.display = 'none';
+  const repairBarInner = document.createElement('i');
+  repairBarInner.style.width = '0%';
+  repairBar.appendChild(repairBarInner);
+  repairCard.querySelector('.t-name').appendChild(repairBar);
+
+  function pollRepair() {
+    if (repairPollTimer) clearInterval(repairPollTimer);
+    repairPollTimer = setInterval(async () => {
+      try {
+        const s = await API('/library/repair/status');
+        if (s.status === 'running' || s.status === 'started') {
+          repairCard._btn.textContent = 'view';
+          repairBar.style.display = '';
+          if (s.files_total && s.files_done !== undefined) {
+            const pct = Math.round(s.files_done / s.files_total * 100);
+            repairBarInner.style.width = pct + '%';
+          }
+          repairCard._statusSpan.textContent = 'running…';
+        } else {
+          clearInterval(repairPollTimer);
+          repairPollTimer = null;
+          repairCard._btn.disabled = false;
+          repairCard._btn.textContent = 'run';
+          repairBar.style.display = 'none';
+          if (s.status === 'ok' && s.fixed !== undefined) {
+            repairCard._statusSpan.textContent = 'last run: ' + s.fixed + ' fixed';
+          } else if (s.status === 'idle') {
+            repairCard._statusSpan.textContent = 'not run yet';
+          } else {
+            repairCard._statusSpan.textContent = s.status + (s.reason ? ': ' + s.reason : '');
+          }
+        }
+      } catch(e) {}
+    }, 2000);
+  }
+  // Check initial repair status
+  try {
+    const s = await API('/library/repair/status');
+    if (s.status === 'running' || s.status === 'started') {
+      pollRepair();
+    } else if (s.status === 'ok' && s.fixed !== undefined) {
+      repairCard._statusSpan.textContent = 'last run: ' + s.fixed + ' fixed';
+    } else if (s.status === 'idle') {
+      repairCard._statusSpan.textContent = 'not run yet';
+    }
+  } catch(e) {}
+  el.appendChild(repairCard);
+
+  // 3. De-duplicate
+  const dedupCard = makeToolCard('De-duplicate', 'scanning…', 'run', async () => {
+    dedupCard._btn.disabled = true;
+    dedupCard._statusSpan.textContent = 'running…';
+    try {
+      const r = await API('/library/dedup/run', {method: 'POST'});
+      dedupCard._statusSpan.textContent = (r.duplicates || 0) + ' duplicates found';
+    } catch(e) {
+      dedupCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      dedupCard._btn.disabled = false;
+    }
+  });
+  // Load initial dedup report count
+  API('/library/dedup/report', {method: 'POST'}).then(r => {
+    dedupCard._statusSpan.textContent = (r.duplicates || 0) + ' candidates found';
+  }).catch(() => {});
+  el.appendChild(dedupCard);
+
+  // 4. Title cleanup (with expand panel)
+  let suffixesExpanded = false;
+  const suffixCard = makeToolCard('Title cleanup', 'suffix list', 'edit', () => {
+    suffixesExpanded = !suffixesExpanded;
+    suffixPanel.style.display = suffixesExpanded ? '' : 'none';
+    suffixCard._btn.textContent = suffixesExpanded ? 'close' : 'edit';
+    if (suffixesExpanded) loadSuffixes();
+  });
+
+  const suffixPanel = document.createElement('div');
+  suffixPanel.style.display = 'none';
+  suffixPanel.style.padding = '10px 14px';
+  suffixPanel.style.borderTop = '1px solid var(--line)';
+  const suffixTextarea = document.createElement('textarea');
+  suffixTextarea.style.cssText = 'width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-family:JetBrains Mono,monospace;font-size:.72rem;padding:8px;border-radius:3px;height:120px;resize:vertical';
+  const suffixSaveBtn = document.createElement('button');
+  suffixSaveBtn.className = 'btn ghost';
+  suffixSaveBtn.style.marginTop = '8px';
+  suffixSaveBtn.textContent = 'save';
+  suffixSaveBtn.onclick = async () => {
+    const lines = suffixTextarea.value.split('\n').map(s => s.trim()).filter(Boolean);
+    suffixSaveBtn.disabled = true;
+    try {
+      await API('/library/suffixes', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({suffixes: lines})});
+      suffixCard._statusSpan.textContent = 'suffix list · ' + lines.length + ' rules';
+    } catch(e) {
+      suffixCard._statusSpan.textContent = 'save failed: ' + (e.message || 'unknown');
+    } finally {
+      suffixSaveBtn.disabled = false;
+    }
+  };
+  suffixPanel.appendChild(suffixTextarea);
+  suffixPanel.appendChild(suffixSaveBtn);
+
+  async function loadSuffixes() {
+    try {
+      const r = await API('/library/suffixes');
+      suffixTextarea.value = (r.suffixes || []).join('\n');
+      suffixCard._statusSpan.textContent = 'suffix list · ' + (r.suffixes || []).length + ' rules';
+    } catch(e) {}
+  }
+  loadSuffixes();
+
+  // Wrap suffix card in a column container to allow panel expansion
+  const suffixWrapper = document.createElement('div');
+  suffixWrapper.className = 'tool';
+  suffixWrapper.style.flexDirection = 'column';
+  suffixWrapper.style.alignItems = 'stretch';
+  suffixWrapper.style.padding = '0';
+  const suffixRow = document.createElement('div');
+  suffixRow.style.cssText = 'display:flex;align-items:center;gap:12px;padding:15px 14px';
+  suffixRow.appendChild(suffixCard.querySelector('.t-name'));
+  suffixRow.appendChild(suffixCard.querySelector('.go'));
+  suffixWrapper.appendChild(suffixRow);
+  suffixWrapper.appendChild(suffixPanel);
+  suffixWrapper._statusSpan = suffixCard._statusSpan;
+  suffixWrapper._btn = suffixCard._btn;
+  el.appendChild(suffixWrapper);
+
+  // 5. Import
+  let importExpanded = false;
+  const importCard = makeToolCard('Import', 'SoundCloud likes · Spotify playlists', 'open', () => {
+    importExpanded = !importExpanded;
+    importPanel.style.display = importExpanded ? '' : 'none';
+    importCard._btn.textContent = importExpanded ? 'close' : 'open';
+  });
+
+  const importPanel = document.createElement('div');
+  importPanel.style.display = 'none';
+  importPanel.style.padding = '10px 14px';
+  importPanel.style.borderTop = '1px solid var(--line)';
+  const importUrlInput = document.createElement('input');
+  importUrlInput.className = 'txt';
+  importUrlInput.type = 'text';
+  importUrlInput.placeholder = 'paste SoundCloud/YouTube URL…';
+  importUrlInput.style.width = '100%';
+  importUrlInput.style.marginBottom = '8px';
+  const importBtn = document.createElement('button');
+  importBtn.className = 'btn run';
+  importBtn.style.width = '100%';
+  importBtn.textContent = '▶ download';
+  importBtn.onclick = async () => {
+    const url = importUrlInput.value.trim();
+    if (!url) return;
+    importBtn.disabled = true;
+    importBtn.textContent = 'downloading…';
+    try {
+      await API('/', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url, m3u: 'imported'})});
+      importBtn.textContent = '✓ started';
+    } catch(e) {
+      importBtn.textContent = 'Error: ' + (e.message || 'failed');
+    } finally {
+      importBtn.disabled = false;
+    }
+  };
+  importPanel.appendChild(importUrlInput);
+  importPanel.appendChild(importBtn);
+
+  // Wrap import card in a column container to allow panel expansion
+  const importWrapper = document.createElement('div');
+  importWrapper.className = 'tool';
+  importWrapper.style.flexDirection = 'column';
+  importWrapper.style.alignItems = 'stretch';
+  importWrapper.style.padding = '0';
+  const importRow = document.createElement('div');
+  importRow.style.cssText = 'display:flex;align-items:center;gap:12px;padding:15px 14px';
+  importRow.appendChild(importCard.querySelector('.t-name'));
+  importRow.appendChild(importCard.querySelector('.go'));
+  importWrapper.appendChild(importRow);
+  importWrapper.appendChild(importPanel);
+  el.appendChild(importWrapper);
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   // Register all screens
   screens['mixes']   = {el: document.getElementById('s-mixes'),   render: renderMixes};
-  screens['library'] = {el: document.getElementById('s-library'), render: () => {}};
+  screens['library'] = {el: document.getElementById('s-library'), render: renderLibrary};
   screens['search']  = {el: document.getElementById('s-search'),  render: () => {}};
   screens['setup']   = {el: document.getElementById('s-setup'),   render: () => {}};
 
