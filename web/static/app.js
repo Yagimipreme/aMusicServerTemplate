@@ -754,13 +754,213 @@ async function renderLibrary() {
   el.appendChild(importWrapper);
 }
 
+// ── Search screen ─────────────────────────────────────────────────────────────
+
+async function renderSearch() {
+  const el = document.getElementById('s-search');
+  el.textContent = '';
+
+  // Searchbox
+  const box = document.createElement('div');
+  box.className = 'searchbox';
+  const input = document.createElement('input');
+  input.placeholder = 'artist, track or paste URL…';
+  const goBtn = document.createElement('button');
+  goBtn.className = 'btn run';
+  goBtn.style.flex = '0 0 auto';
+  goBtn.textContent = 'GO';
+  box.appendChild(input);
+  box.appendChild(goBtn);
+  el.appendChild(box);
+
+  // Source pills
+  const srcRow = document.createElement('div');
+  srcRow.className = 'src-row';
+  let activeFilter = 'all';
+  const filterPills = {};
+  ['all', 'soundcloud', 'youtube'].forEach(f => {
+    const pill = document.createElement('span');
+    pill.className = 'src' + (f === 'all' ? ' on' : '');
+    pill.textContent = f;
+    pill.onclick = () => {
+      activeFilter = f;
+      Object.values(filterPills).forEach(p => p.classList.remove('on'));
+      pill.classList.add('on');
+      applyFilter();
+    };
+    filterPills[f] = pill;
+    srcRow.appendChild(pill);
+  });
+  el.appendChild(srcRow);
+
+  // Results container
+  const resultsEl = document.createElement('div');
+  el.appendChild(resultsEl);
+
+  let allResults = [];
+
+  function applyFilter() {
+    resultsEl.textContent = '';
+    const filtered = activeFilter === 'all' ? allResults : allResults.filter(r => r.source === activeFilter);
+    filtered.forEach(r => resultsEl.appendChild(r.el));
+  }
+
+  function formatDur(sec) {
+    if (!sec) return '';
+    const m = Math.floor(sec / 60);
+    const s = String(Math.floor(sec % 60)).padStart(2, '0');
+    return m + ':' + s;
+  }
+
+  function buildResultRow(item) {
+    // item: {source:'sc'|'yt', title, artist, duration (seconds), url}
+    const row = document.createElement('div');
+    row.className = 'result';
+
+    const cover = document.createElement('div');
+    cover.className = 'cover';
+    cover.textContent = item.source === 'sc' ? 'SC' : 'YT';
+    row.appendChild(cover);
+
+    const meta = document.createElement('div');
+    meta.className = 'r-meta';
+    const title = document.createElement('b');
+    title.textContent = item.title || '(untitled)';
+    const sub = document.createElement('span');
+    const subParts = [item.artist || ''];
+    if (item.duration) subParts.push(formatDur(item.duration));
+    sub.textContent = subParts.filter(Boolean).join(' · ');
+    meta.appendChild(title);
+    meta.appendChild(sub);
+    row.appendChild(meta);
+
+    const getBtn = document.createElement('button');
+    getBtn.className = 'get';
+    getBtn.textContent = '+';
+    getBtn.onclick = async () => {
+      if (getBtn.classList.contains('have')) return;
+      getBtn.disabled = true;
+      try {
+        await API('/acquire', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url: item.url})});
+        getBtn.textContent = '✓';
+        getBtn.classList.add('have');
+        getBtn.disabled = false;
+      } catch(e) {
+        if (e.status === 409) {
+          getBtn.textContent = '…';
+          getBtn.disabled = false;
+          setTimeout(() => { getBtn.textContent = '+'; }, 3000);
+        } else {
+          getBtn.textContent = '!';
+          getBtn.disabled = false;
+          setTimeout(() => { getBtn.textContent = '+'; }, 2000);
+        }
+      }
+    };
+    row.appendChild(getBtn);
+
+    return {el: row, source: item.source === 'sc' ? 'soundcloud' : 'youtube'};
+  }
+
+  async function doSearch(q) {
+    resultsEl.textContent = '';
+    allResults = [];
+
+    const loadingMsg = document.createElement('div');
+    loadingMsg.className = 'warn';
+    loadingMsg.textContent = 'Searching…';
+    resultsEl.appendChild(loadingMsg);
+
+    // Parallel search
+    const [scRes, ytRes] = await Promise.allSettled([
+      API('/sc/search/tracks?q=' + encodeURIComponent(q)),
+      API('/yt/search?q=' + encodeURIComponent(q)),
+    ]);
+
+    resultsEl.textContent = '';
+    allResults = [];
+
+    // SC first — track shape from _track_from_raw:
+    // {title, artist (top-level, already extracted from user.username),
+    //  permalink_url, duration_ms (milliseconds), source:'sc'}
+    if (scRes.status === 'fulfilled' && scRes.value.tracks) {
+      scRes.value.tracks.forEach(t => {
+        const item = {
+          source: 'sc',
+          title: t.title || '',
+          artist: t.artist || '',
+          duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
+          url: t.permalink_url || '',
+        };
+        if (item.url) allResults.push(buildResultRow(item));
+      });
+    }
+
+    // YT
+    if (ytRes.status === 'fulfilled' && ytRes.value.results) {
+      ytRes.value.results.forEach(r => {
+        allResults.push(buildResultRow({
+          source: 'yt',
+          title: r.title,
+          artist: r.artist,
+          duration: r.duration,
+          url: r.url,
+        }));
+      });
+    }
+
+    if (allResults.length === 0) {
+      const none = document.createElement('div');
+      none.className = 'warn';
+      none.textContent = 'No results.';
+      resultsEl.appendChild(none);
+      return;
+    }
+
+    applyFilter();
+  }
+
+  async function doAcquireUrl(url) {
+    resultsEl.textContent = '';
+    const msg = document.createElement('div');
+    msg.className = 'warn';
+    msg.textContent = 'Downloading…';
+    resultsEl.appendChild(msg);
+    try {
+      const r = await API('/acquire', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url})});
+      msg.textContent = r.status === 'ok' ? ('Downloaded: ' + (r.path || url)) : ('Error: ' + (r.path || 'unknown'));
+    } catch(e) {
+      if (e.status === 409) {
+        msg.textContent = 'Already downloading this URL.';
+      } else if (e.status === 400) {
+        msg.textContent = 'Unsupported URL. Only YouTube and SoundCloud URLs are supported.';
+      } else {
+        msg.textContent = 'Error: ' + (e.message || 'unknown');
+      }
+    }
+  }
+
+  function onGo() {
+    const q = input.value.trim();
+    if (!q) return;
+    if (/^https?:\/\//.test(q)) {
+      doAcquireUrl(q);
+    } else {
+      doSearch(q);
+    }
+  }
+
+  goBtn.onclick = onGo;
+  input.onkeydown = e => { if (e.key === 'Enter') onGo(); };
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   // Register all screens
   screens['mixes']   = {el: document.getElementById('s-mixes'),   render: renderMixes};
   screens['library'] = {el: document.getElementById('s-library'), render: renderLibrary};
-  screens['search']  = {el: document.getElementById('s-search'),  render: () => {}};
+  screens['search']  = {el: document.getElementById('s-search'),  render: renderSearch};
   screens['setup']   = {el: document.getElementById('s-setup'),   render: () => {}};
 
   // Clock
