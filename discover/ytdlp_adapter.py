@@ -9,6 +9,29 @@ logger = logging.getLogger(__name__)
 
 _MAX_TRACK_SECONDS = 900  # 15 min; filters phone reviews/cooking/loops but keeps DJ edits
 
+_DEFAULT_JUNK_KEYWORDS: frozenset = frozenset({
+    "review", "tutorial", "reaction", "cooking", "recipe",
+    "horoscope", "astrology", "type beat", "asmr", "unboxing",
+    "vlog", "podcast", "gameplay", "walkthrough",
+})
+
+
+def _is_music_result(entry: dict, artist_name: str,
+                     extra_junk: frozenset = frozenset()) -> bool:
+    title = (entry.get("title") or "").casefold()
+    channel = (
+        (entry.get("uploader") or "")
+        + " "
+        + (entry.get("channel") or "")
+    ).casefold()
+    artist_cf = artist_name.casefold()
+
+    if artist_cf not in title and artist_cf not in channel:
+        return False
+
+    junk = _DEFAULT_JUNK_KEYWORDS | extra_junk
+    return not any(kw in title for kw in junk)
+
 
 def make_search_fn():
     """Return search_fn(artist_name, n) -> [{"title", "url"}] via yt-dlp flat search."""
