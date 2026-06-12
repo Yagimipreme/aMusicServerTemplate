@@ -33,32 +33,46 @@ def _is_music_result(entry: dict, artist_name: str,
     return not any(kw in title for kw in junk)
 
 
-def make_search_fn():
-    """Return search_fn(artist_name, n) -> [{"title", "url"}] via yt-dlp flat search."""
+def make_search_fn(oversample: int = 5,
+                   extra_junk_keywords: frozenset = frozenset()):
+    """Return search_fn(artist_name, n, track_hint=None) via yt-dlp flat search.
+
+    Fetches n×oversample candidates, applies _is_music_result filter, returns up to n.
+    Default query suffix changed from 'music' to 'official audio'.
+    """
     from yt_dlp import YoutubeDL
 
     def search_fn(artist_name, n, track_hint=None):
-        # Use the specific Last.fm top-track title when available for a targeted search.
-        # Fall back to "{artist} music" for generic discovery.
-        suffix = track_hint if track_hint else "music"
-        query = f"ytsearch{n}:{artist_name} {suffix}"
+        suffix = track_hint if track_hint else "official audio"
+        fetch_n = n * oversample
+        query = f"ytsearch{fetch_n}:{artist_name} {suffix}"
         opts = {"quiet": True, "skip_download": True, "extract_flat": "in_playlist"}
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(query, download=False)
         entries = (info or {}).get("entries", []) or []
         out = []
         for e in entries:
+            if len(out) >= n:
+                break
             vid = e.get("id")
-            url = e.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else None)
+            url = e.get("url") or (
+                f"https://www.youtube.com/watch?v={vid}" if vid else None
+            )
             if not url:
                 continue
             duration = e.get("duration") or 0
             if duration and duration > _MAX_TRACK_SECONDS:
                 continue
+            if not _is_music_result(e, artist_name, extra_junk_keywords):
+                continue
             out.append({"title": e.get("title", ""), "url": url})
         return out
 
     return search_fn
+
+
+# Module-level search callable — used by run_mix_from_config and tests.
+search = make_search_fn()
 
 
 def make_download_fn(download_callable):

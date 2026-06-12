@@ -104,9 +104,12 @@ def _build_discover_deps():
 
     state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
     ttl_days = int((cfg.get("discover") or {}).get("suggested_ttl_days", 90))
+    disc_cfg = cfg.get("discover") or {}
+    _oversample = int(disc_cfg.get("yt_oversample", 5))
+    _extra_junk = frozenset(disc_cfg.get("junk_keywords", []))
     return SimpleNamespace(
         subsonic=Subsonic(host, user, pw),
-        search_fn=make_search_fn(),
+        search_fn=make_search_fn(oversample=_oversample, extra_junk_keywords=_extra_junk),
         download_fn=make_download_fn(lambda url: dl_mod.download_url(url, song_dir)),
         state=load_state(state_path, ttl_days=ttl_days),
         song_dir=song_dir,
