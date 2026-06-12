@@ -21,6 +21,10 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
     boosting artists that appear across multiple periods.
     """
     artists = subsonic.get_frequent_artists(size=max(limit, 50))
+    # Normalize play_count to [0, 1] weights; missing/zero play counts get 0.0
+    _max_pc = max((a.get("play_count", 0) for a in artists), default=1) or 1
+    for a in artists:
+        a["weight"] = (a.get("play_count", 0) or 0) / _max_pc
     nav_artists = artists[:limit]
 
     if not lastfm_client or not lastfm_username:
@@ -87,7 +91,7 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
             break
         cf = name.casefold()
         if cf not in seen:
-            merged.append({"id": None, "name": name})
+            merged.append({"id": None, "name": name, "play_count": 0, "weight": 1.0})
             seen.add(cf)
 
     return merged[:limit]
