@@ -820,24 +820,18 @@ def discover_config_post():
 
 @app.route("/discover/run", methods=["POST"])
 def discover_run():
-    if not _discover_running.acquire(blocking=False):
-        return jsonify({"status": "busy", "reason": "another discover run in progress"}), 409
-    try:
-        result = _run_discover_once()
-    finally:
-        _discover_running.release()
+    result = _run_discover_once()
+    if result.get("status") == "busy":
+        return jsonify(result), 409
     code = 200 if result.get("status") in ("ok", "disabled") else 500
     return jsonify(result), code
 
 
 @app.route("/discover/run_daily", methods=["POST"])
 def discover_run_daily():
-    if not _discover_running.acquire(blocking=False):
-        return jsonify({"status": "busy", "reason": "another discover run in progress"}), 409
-    try:
-        result = _run_discover_daily_once()
-    finally:
-        _discover_running.release()
+    result = _run_discover_daily_once()
+    if result.get("status") == "busy":
+        return jsonify(result), 409
     code = 200 if result.get("status") in ("ok", "disabled", "skipped") else 500
     return jsonify(result), code
 

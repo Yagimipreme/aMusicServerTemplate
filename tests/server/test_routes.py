@@ -484,3 +484,73 @@ def test_post_discover_run_daily_legacy_alias(client, tmp_path):
                return_value={"profile": "daily", "acquired": 0, "library_added": 0, "m3u": None}):
         resp = client.post("/discover/run_daily")
     assert resp.status_code == 200
+
+
+# ── Issue 1: lock reentry — route must NOT hold lock before calling _run_profile_once ─
+
+def test_discover_run_happy_path_200_via_engine_patch(client, tmp_path):
+    """POST /discover/run returns 200 on success; patches run_profile engine fn, not _run_profile_once.
+
+    Before the fix, routes acquired _discover_running then called _run_profile_once which
+    also tried to acquire the same non-reentrant lock → always returned 409 busy.
+    After the fix, only _run_profile_once holds the lock; routes just call _run_discover_once.
+    """
+    import json as _json
+    cfg = {"discover": {"playlist_name": "Weekly Mix", "run_day": "sunday",
+                        "run_hour": 22, "weekly_count": 30, "playlist_cap": 100}}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    fake_result = {"profile": "weekly", "acquired": 3, "library_added": 0, "m3u": "/tmp/x.m3u"}
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("discover.engine.run_profile", return_value=fake_result), \
+         patch("sWebExt.py_server.server._build_discover_deps") as mock_deps:
+        mock_deps.return_value = __import__("types").SimpleNamespace(
+            subsonic=None, search_fn=None, download_fn=None,
+            state=None, song_dir="/tmp", lastfm_client=None,
+        )
+        resp = client.post("/discover/run")
+    assert resp.status_code == 200, f"Expected 200 got {resp.status_code}: {resp.data}"
+    data = _json.loads(resp.data)
+    assert data.get("status") == "ok"
+
+
+def test_discover_run_daily_happy_path_200_via_engine_patch(client, tmp_path):
+    """POST /discover/run_daily returns 200 on success; patches run_profile engine fn."""
+    import json as _json
+    cfg = {"discover": {
+        "playlist_name": "Weekly Mix", "run_day": "sunday", "run_hour": 22,
+        "weekly_count": 30, "playlist_cap": 100,
+        "daily": {"enabled": True, "count": 7, "run_hour": 7,
+                  "window_days": 7, "playlist_name": "Daily Mix"},
+    }}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    fake_result = {"profile": "daily", "acquired": 2, "library_added": 0, "m3u": "/tmp/d.m3u"}
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("discover.engine.run_profile", return_value=fake_result), \
+         patch("sWebExt.py_server.server._build_discover_deps") as mock_deps:
+        mock_deps.return_value = __import__("types").SimpleNamespace(
+            subsonic=None, search_fn=None, download_fn=None,
+            state=None, song_dir="/tmp", lastfm_client=None,
+        )
+        resp = client.post("/discover/run_daily")
+    assert resp.status_code == 200, f"Expected 200 got {resp.status_code}: {resp.data}"
+    data = _json.loads(resp.data)
+    assert data.get("status") == "ok"
+
+
+def test_discover_run_busy_maps_to_409_from_run_profile_once(client, tmp_path):
+    """When _run_profile_once returns busy (lock held), route returns 409."""
+    import json as _json
+    import sWebExt.py_server.server as srv
+    cfg = {"discover": {"playlist_name": "Weekly Mix", "run_day": "sunday",
+                        "run_hour": 22, "weekly_count": 30, "playlist_cap": 100}}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    # Hold the lock so _run_profile_once gets "busy"
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
+        with srv._discover_running:
+            resp = client.post("/discover/run")
+    assert resp.status_code == 409
+    data = _json.loads(resp.data)
+    assert data["status"] == "busy"
