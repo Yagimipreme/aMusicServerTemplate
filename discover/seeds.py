@@ -91,6 +91,8 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
             break
         cf = name.casefold()
         if cf not in seen:
+            # weight=1.0: Last.fm-only artists have no local play data but are strong
+            # discovery signals — treat them equal to the most-played owned artist.
             merged.append({"id": None, "name": name, "play_count": 0, "weight": 1.0})
             seen.add(cf)
 
@@ -99,6 +101,8 @@ def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
 
 def get_bootstrap_seeds(cfg, subsonic, lastfm_client=None):
     """Collect cold-start seeds from manual config, Spotify CSVs, and library frequency."""
+    # Bootstrap seeds omit weight/play_count — the bootstrap path is cold-start
+    # and has no play history. expand_similar defaults weight to 1.0 for all seeds.
     seeds = []
 
     # 1. Manual seeds (highest priority)
