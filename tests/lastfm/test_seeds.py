@@ -139,7 +139,9 @@ def test_collect_seeds_falls_back_silently_on_lastfm_error():
     client.call.side_effect = Exception("network")
     result = collect_seeds(sub, limit=2, lastfm_client=client, lastfm_username="user")
     # Should fall back to Navidrome-only without raising
-    assert result == [{"id": "a1", "name": "BoC"}]
+    assert len(result) == 1
+    assert result[0]["id"] == "a1"
+    assert result[0]["name"] == "BoC"
 
 
 def test_collect_seeds_respects_limit():
