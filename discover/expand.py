@@ -1,4 +1,5 @@
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,52 @@ def _expand_via_lastfm(lastfm_client, artist_name: str) -> list:
     except Exception:
         logger.warning("expand: Last.fm similar_artists failed for %s", artist_name, exc_info=True)
         return []
+
+
+def enrich_artist_info(lastfm_client, artists, min_listeners: int = 5000):
+    """Fetch artist.getInfo per artist; filter by listener floor; rescale score.
+
+    Adds: listeners (int), top_track (str|None) to each artist dict.
+    Returns filtered list — artists below min_listeners are dropped.
+    Artists where the API call fails are KEPT (don't silently empty the list).
+    """
+    from lastfm.similar import get_artist_top_tracks
+
+    enriched = []
+    for a in artists:
+        keep = True
+        try:
+            info = lastfm_client.call("artist.getInfo", artist=a["name"])
+            listeners = int(
+                (info.get("artist") or {})
+                .get("stats", {})
+                .get("listeners", 0)
+            )
+            a["listeners"] = listeners
+            if listeners < min_listeners:
+                keep = False
+        except Exception:
+            logger.warning("enrich_artist_info: getInfo failed for %s — keeping",
+                           a["name"], exc_info=True)
+            a["listeners"] = 0  # unknown; keep to avoid empty list on API failure
+
+        if not keep:
+            continue
+
+        # Rescale score: similarity × log10(listeners) — keeps similarity primary
+        if a.get("listeners", 0) > 0:
+            a["score"] = a.get("score", 1.0) * math.log10(max(a["listeners"], 10))
+
+        # Top track — for targeted YouTube search; None falls back to "official audio"
+        try:
+            tracks = get_artist_top_tracks(lastfm_client, a["name"], limit=1)
+            a["top_track"] = tracks[0]["title"] if tracks else None
+        except Exception:
+            a["top_track"] = None
+
+        enriched.append(a)
+
+    return enriched
 
 
 def enrich_top_tracks(lastfm_client, artists):

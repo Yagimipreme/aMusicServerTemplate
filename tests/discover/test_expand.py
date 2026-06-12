@@ -80,3 +80,57 @@ def test_expand_similar_uses_seed_weight():
     scores = {a["name"]: a["score"] for a in result}
     # TargetArtist: 0.9×1.0 = 0.9; WeakTarget: 0.9×0.1 = 0.09
     assert scores["TargetArtist"] > scores["WeakTarget"]
+
+
+def test_enrich_artist_info_drops_below_listener_floor():
+    from discover.expand import enrich_artist_info
+
+    class FakeLFM:
+        def call(self, method, **kwargs):
+            name = kwargs.get("artist", "")
+            listeners = "200000" if name == "Burial" else "100"
+            return {"artist": {"stats": {"listeners": listeners}}}
+
+    artists = [
+        {"name": "Burial", "score": 0.9},
+        {"name": "TinyArtist", "score": 0.8},
+    ]
+
+    result = enrich_artist_info(FakeLFM(), artists, min_listeners=5000)
+    names = [a["name"] for a in result]
+    assert "Burial" in names
+    assert "TinyArtist" not in names
+
+
+def test_enrich_artist_info_keeps_artist_on_api_error():
+    from discover.expand import enrich_artist_info
+
+    class BrokenLFM:
+        def call(self, method, **kwargs):
+            raise RuntimeError("network error")
+
+    artists = [{"name": "SomeArtist", "score": 0.5}]
+    result = enrich_artist_info(BrokenLFM(), artists, min_listeners=5000)
+    assert len(result) == 1
+
+
+def test_enrich_artist_info_rescores_by_listeners():
+    from discover.expand import enrich_artist_info
+    import math
+
+    class FakeLFM:
+        def call(self, method, **kwargs):
+            name = kwargs.get("artist", "")
+            if method == "artist.getInfo":
+                listeners = "1000000" if name == "BigArtist" else "10000"
+                return {"artist": {"stats": {"listeners": listeners}}}
+            # artist.getTopTracks — return empty
+            return {"toptracks": {"track": []}}
+
+    artists = [
+        {"name": "BigArtist", "score": 0.5},
+        {"name": "SmallArtist", "score": 0.5},
+    ]
+    result = enrich_artist_info(FakeLFM(), artists, min_listeners=5000)
+    scores = {a["name"]: a["score"] for a in result}
+    assert scores["BigArtist"] > scores["SmallArtist"]
