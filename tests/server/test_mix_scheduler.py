@@ -124,3 +124,39 @@ def test_result_always_in_future(server_module):
         profile = make_profile(cadence=cadence, run_day="friday", run_hour=7)
         result = server_module._profile_next_run(profile, now)
         assert result > now, f"result {result} should be > now {now} for cadence={cadence}"
+
+
+# ── Issue 7: due-selection helper ────────────────────────────────────────────
+
+def test_profiles_due_at_wall_clock_time(server_module):
+    """_profiles_due_now returns profiles whose next_run <= wall-clock now (fresh clock)."""
+    # Profile A was due 5 min ago, Profile B is due in 1 hour
+    now = datetime.datetime(2026, 6, 12, 10, 0, 0)
+    past = now - datetime.timedelta(minutes=5)
+    future = now + datetime.timedelta(hours=1)
+    profile_a = make_profile(cadence="daily", run_hour=9)   # due at 9:00, past
+    profile_b = make_profile(cadence="daily", run_hour=11)  # due at 11:00, future
+    # Inject precomputed next_runs (simulating stale scheduler state)
+    next_runs = {
+        "test_a": past,
+        "test_b": future,
+    }
+    profiles = [
+        {**profile_a, "id": "test_a", "name": "A"},
+        {**profile_b, "id": "test_b", "name": "B"},
+    ]
+    due = server_module._profiles_due_now(profiles, next_runs, now)
+    assert any(p["id"] == "test_a" for p in due), "profile_a should be due"
+    assert not any(p["id"] == "test_b" for p in due), "profile_b should not be due"
+
+
+def test_profiles_due_now_uses_injected_now(server_module):
+    """_profiles_due_now uses the injected wall-clock time, not a stale value."""
+    now_late = datetime.datetime(2026, 6, 12, 23, 0, 0)
+    # next_run was set earlier when now was 10:00; a profile due at 22:00 should now be due
+    profile = make_profile(cadence="daily", run_hour=22)
+    profile["id"] = "evening"
+    profile["name"] = "Evening"
+    next_run_time = datetime.datetime(2026, 6, 12, 22, 0, 0)  # in the past relative to now_late
+    due = server_module._profiles_due_now([profile], {"evening": next_run_time}, now_late)
+    assert any(p["id"] == "evening" for p in due)

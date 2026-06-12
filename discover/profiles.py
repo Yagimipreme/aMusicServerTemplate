@@ -19,6 +19,8 @@ def validate_profile(p: dict, existing: list | None = None) -> dict:
         errors["id"] = "duplicate id"
     if not p.get("name"):
         errors["name"] = "required"
+    elif existing and any(o.get("name", "").casefold() == str(p["name"]).casefold() for o in existing):
+        errors["name"] = "duplicate name"
     sched = p.get("schedule") or {}
     if sched.get("cadence") not in VALID_CADENCES:
         errors["schedule.cadence"] = "must be daily or weekly"
@@ -58,10 +60,13 @@ def migrate_config(cfg: dict) -> list:
     if isinstance(cfg.get("mixes"), list):
         return cfg["mixes"]
     disc = cfg.get("discover") or {}
+    # Honor legacy discover.schedule=="daily" for the weekly profile's cadence (issue 16)
+    legacy_schedule = disc.get("schedule", "weekly")
+    weekly_cadence = "daily" if str(legacy_schedule).lower() == "daily" else "weekly"
     weekly = {
         "id": "weekly", "name": disc.get("playlist_name", "Weekly Mix"),
         "enabled": True, "auto_generated": False,
-        "schedule": {"cadence": "weekly", "run_day": disc.get("run_day", "sunday"),
+        "schedule": {"cadence": weekly_cadence, "run_day": disc.get("run_day", "sunday"),
                      "run_hour": int(disc.get("run_hour", 22))},
         "count": int(disc.get("weekly_count", 30)),
         "cap": int(disc.get("playlist_cap", 100)),
@@ -72,19 +77,19 @@ def migrate_config(cfg: dict) -> list:
     }
     mixes = [weekly]
     daily = disc.get("daily") or {}
-    if daily:
-        d_count = max(1, int(daily.get("count", 7)))
-        mixes.append({
-            "id": "daily", "name": daily.get("playlist_name", "Daily Mix"),
-            "enabled": bool(daily.get("enabled", True)), "auto_generated": False,
-            "schedule": {"cadence": "daily", "run_day": "",
-                         "run_hour": int(daily.get("run_hour", 7))},
-            "count": d_count,
-            "cap": d_count * max(1, int(daily.get("window_days", 7))),
-            "new_ratio": 1.0,
-            "seeds": {"mode": "history", "genres": [], "artists": [], "playlist": ""},
-            "quality": {},
-        })
+    # Always create the daily built-in (spec defaults when daily key absent)
+    d_count = max(1, int(daily.get("count", 7)))
+    mixes.append({
+        "id": "daily", "name": daily.get("playlist_name", "Daily Mix"),
+        "enabled": bool(daily.get("enabled", True)), "auto_generated": False,
+        "schedule": {"cadence": "daily", "run_day": "",
+                     "run_hour": int(daily.get("run_hour", 7))},
+        "count": d_count,
+        "cap": d_count * max(1, int(daily.get("window_days", 7))),
+        "new_ratio": 1.0,
+        "seeds": {"mode": "history", "genres": [], "artists": [], "playlist": ""},
+        "quality": {},
+    })
     return mixes
 
 

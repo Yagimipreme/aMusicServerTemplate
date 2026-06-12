@@ -79,6 +79,11 @@ _discover_running = threading.Lock()
 
 _dedup_running = threading.Lock()
 
+# ── Config read-modify-write lock ─────────────────────────────────────────────
+# RLock so nested callers (e.g. _load_mixes inside mixes_post) can re-enter.
+
+_config_lock = threading.RLock()
+
 
 # ── Business logic (unchanged from stdlib version) ────────────────────────────
 
@@ -168,7 +173,7 @@ def _run_discover_daily_once():
         mixes = _load_mixes()
         profile = next((m for m in mixes if m.get("id") == "daily"), None)
         if profile is None:
-            return {"status": "disabled", "reason": "navidrome creds missing"}
+            return {"status": "disabled", "reason": "daily profile not found"}
         result = _run_profile_once(profile)
         if result.get("status") not in ("busy", "disabled", "error"):
             return {"status": "ok", **result}
@@ -239,12 +244,13 @@ def _atomic_write_config(cfg: dict) -> None:
 
 def _load_mixes() -> list:
     """Load and migrate mixes list from config, persisting migration on first load."""
-    cfg = _get_config()
-    from discover.profiles import migrate_config
-    mixes = migrate_config(cfg)
-    if "mixes" not in cfg:                       # persist migration once
-        cfg["mixes"] = mixes
-        _atomic_write_config(cfg)
+    with _config_lock:
+        cfg = _get_config()
+        from discover.profiles import migrate_config
+        mixes = migrate_config(cfg)
+        if "mixes" not in cfg:                       # persist migration once
+            cfg["mixes"] = mixes
+            _atomic_write_config(cfg)
     return mixes
 
 
@@ -268,6 +274,20 @@ def _persist_next_runs(next_runs: dict) -> None:
 
 
 _mix_wake = threading.Event()
+
+
+def _profiles_due_now(profiles: list, next_runs: dict, now: datetime.datetime) -> list:
+    """Return profiles whose precomputed next_run is <= wall-clock now.
+
+    Uses the injected `now` timestamp so callers can re-read the clock per
+    scheduler iteration and avoid stale-`now` issues (Issue 7).
+    """
+    due = []
+    for p in profiles:
+        nr = next_runs.get(p["id"])
+        if nr is not None and nr <= now:
+            due.append(p)
+    return due
 
 
 def _run_profile_once(profile) -> dict:
@@ -298,21 +318,22 @@ def _bootstrap_genre_profiles(subsonic) -> int:
         genres = subsonic.get_genres()
         if not genres:
             return 0
-        mixes = _load_mixes()
-        if any(m.get("auto_generated") for m in mixes):
-            return 0  # already bootstrapped
-        from discover.profiles import suggest_genre_profiles
-        new_profiles = suggest_genre_profiles(subsonic, mixes)
-        if not new_profiles:
-            return 0
-        existing_ids = {m["id"] for m in mixes}
-        added = [p for p in new_profiles if p["id"] not in existing_ids]
-        if not added:
-            return 0
-        mixes.extend(added)
-        cfg = _get_config()
-        cfg["mixes"] = mixes
-        _atomic_write_config(cfg)
+        with _config_lock:
+            mixes = _load_mixes()
+            if any(m.get("auto_generated") for m in mixes):
+                return 0  # already bootstrapped
+            from discover.profiles import suggest_genre_profiles
+            new_profiles = suggest_genre_profiles(subsonic, mixes)
+            if not new_profiles:
+                return 0
+            existing_ids = {m["id"] for m in mixes}
+            added = [p for p in new_profiles if p["id"] not in existing_ids]
+            if not added:
+                return 0
+            mixes.extend(added)
+            cfg = _get_config()
+            cfg["mixes"] = mixes
+            _atomic_write_config(cfg)
         logger.info("[MIXES] bootstrapped %d genre profile(s): %s",
                     len(added), [p["id"] for p in added])
         return len(added)
@@ -368,10 +389,15 @@ def _mix_scheduler_loop():
             soonest = min(next_runs.values())
             _mix_wake.wait(max(1.0, (soonest - now).total_seconds()))
             _mix_wake.clear()
+            # Re-read clock and mixes after wake (config may have changed; time moved on)
             now = datetime.datetime.now()
-            for m in [m for m in _load_mixes() if m.get("enabled")]:
-                if _profile_next_run(m, now - datetime.timedelta(minutes=1)) <= now:
-                    _run_profile_once(m)         # sequential; failures logged inside
+            current_mixes = [m for m in _load_mixes() if m.get("enabled")]
+            due = _profiles_due_now(current_mixes, next_runs, now)
+            for m in due:
+                result = _run_profile_once(m)   # sequential; failures logged inside
+                if result.get("status") == "busy":
+                    # Another run just finished; retry this profile on next loop pass
+                    logger.info("[MIXES] %s was busy, will retry next cycle", m["id"])
         except Exception:
             logger.exception("[MIXES] scheduler iteration failed; retrying in 3600s")
             time.sleep(3600)
@@ -854,12 +880,13 @@ def discover_config_post():
     if not updates:
         return jsonify({"status": "error", "error": "no valid keys"}), 400
     try:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-        disc = cfg.setdefault("discover", {})
-        disc.update(updates)
-        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        with _config_lock:
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
+                cfg = json.load(f)
+            disc = cfg.setdefault("discover", {})
+            disc.update(updates)
+            with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
         return jsonify({"status": "ok", "discover": disc})
     except Exception as e:
         logger.exception("discover_config_post failed")
@@ -1052,26 +1079,27 @@ def settings_post():
         return jsonify({"status": "error", "error": "validation errors", "fields": errors}), 400
 
     # Load current config, apply valid updates
-    try:
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception:
-        cfg = {}
+    with _config_lock:
+        try:
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
 
-    for path, value in coerced.items():
-        if value is None:
-            continue  # empty secret = unchanged
-        _settings_set_by_path(cfg, path, value)
+        for path, value in coerced.items():
+            if value is None:
+                continue  # empty secret = unchanged
+            _settings_set_by_path(cfg, path, value)
 
-    # Atomic write
-    tmp_path = _CONFIG_PATH + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, _CONFIG_PATH)
-    except Exception as e:
-        logger.exception("settings_post: write failed")
-        return jsonify({"status": "error", "error": str(e)}), 500
+        # Atomic write
+        tmp_path = _CONFIG_PATH + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, _CONFIG_PATH)
+        except Exception as e:
+            logger.exception("settings_post: write failed")
+            return jsonify({"status": "error", "error": str(e)}), 500
 
     # Exclude paths where value is None (empty secrets that were skipped)
     actually_updated = [path for path, value in coerced.items() if value is not None]
@@ -1096,36 +1124,38 @@ def mixes_get():
 def mixes_post():
     from discover.profiles import validate_profile
     body = request.get_json(force=True, silent=True) or {}
-    cfg = _get_config()
-    mixes = _load_mixes()
-    idx = next((i for i, m in enumerate(mixes) if m["id"] == body.get("id")), None)
-    others = [m for i, m in enumerate(mixes) if i != idx]
-    errors = validate_profile(body, existing=others if idx is None else others)
-    if errors:
-        return jsonify({"status": "error", "errors": errors}), 400
-    body["auto_generated"] = False if idx is not None else bool(body.get("auto_generated"))
-    if idx is None:
-        mixes.append(body)
-        code = 201
-    else:
-        mixes[idx] = body
-        code = 200
-    cfg["mixes"] = mixes
-    _atomic_write_config(cfg)
+    with _config_lock:
+        cfg = _get_config()
+        mixes = _load_mixes()
+        idx = next((i for i, m in enumerate(mixes) if m["id"] == body.get("id")), None)
+        others = [m for i, m in enumerate(mixes) if i != idx]
+        errors = validate_profile(body, existing=others if idx is None else others)
+        if errors:
+            return jsonify({"status": "error", "errors": errors}), 400
+        body["auto_generated"] = False if idx is not None else bool(body.get("auto_generated"))
+        if idx is None:
+            mixes.append(body)
+            code = 201
+        else:
+            mixes[idx] = body
+            code = 200
+        cfg["mixes"] = mixes
+        _atomic_write_config(cfg)
     _mix_wake.set()
     return jsonify({"status": "ok", "mix": body}), code
 
 
 @app.route("/mixes/<mix_id>", methods=["DELETE"])
 def mixes_delete(mix_id):
-    cfg = _get_config()
-    mixes = _load_mixes()
-    idx = next((i for i, m in enumerate(mixes) if m["id"] == mix_id), None)
-    if idx is None:
-        return jsonify({"status": "error", "error": f"mix {mix_id!r} not found"}), 404
-    removed = mixes.pop(idx)
-    cfg["mixes"] = mixes
-    _atomic_write_config(cfg)
+    with _config_lock:
+        cfg = _get_config()
+        mixes = _load_mixes()
+        idx = next((i for i, m in enumerate(mixes) if m["id"] == mix_id), None)
+        if idx is None:
+            return jsonify({"status": "error", "error": f"mix {mix_id!r} not found"}), 404
+        removed = mixes.pop(idx)
+        cfg["mixes"] = mixes
+        _atomic_write_config(cfg)
     _mix_wake.set()
     return jsonify({"status": "ok", "removed": removed["id"]})
 
@@ -1144,20 +1174,21 @@ def mixes_run(mix_id):
 
 @app.route("/mixes/suggest", methods=["POST"])
 def mixes_suggest():
-    cfg = _get_config()
-    mixes = _load_mixes()
     deps = _build_discover_deps()
     if deps is None:
         return jsonify({"status": "disabled", "reason": "navidrome creds missing"}), 503
     try:
         from discover.profiles import suggest_genre_profiles
-        new_profiles = suggest_genre_profiles(deps.subsonic, mixes)
-        # Append only profiles not already in mixes (by id)
-        existing_ids = {m["id"] for m in mixes}
-        added = [p for p in new_profiles if p["id"] not in existing_ids]
-        mixes.extend(added)
-        cfg["mixes"] = mixes
-        _atomic_write_config(cfg)
+        with _config_lock:
+            cfg = _get_config()
+            mixes = _load_mixes()
+            new_profiles = suggest_genre_profiles(deps.subsonic, mixes)
+            # Append only profiles not already in mixes (by id)
+            existing_ids = {m["id"] for m in mixes}
+            added = [p for p in new_profiles if p["id"] not in existing_ids]
+            mixes.extend(added)
+            cfg["mixes"] = mixes
+            _atomic_write_config(cfg)
         _mix_wake.set()
         return jsonify({"status": "ok", "created": added})
     except Exception as e:

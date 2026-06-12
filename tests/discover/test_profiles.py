@@ -175,6 +175,33 @@ def test_validate_profile_update_same_id_not_duplicate():
     assert "id" not in errors
 
 
+# ── Issue 6: unique name enforcement ─────────────────────────────────────────
+
+def test_validate_profile_duplicate_name_rejected():
+    """Duplicate name (different id) must be rejected."""
+    existing = [make_valid_profile(id="other", name="Weekly Mix")]
+    p = make_valid_profile(id="newprofile", name="Weekly Mix")
+    errors = validate_profile(p, existing=existing)
+    assert "name" in errors
+
+
+def test_validate_profile_duplicate_name_case_insensitive():
+    """Name uniqueness check is case-insensitive."""
+    existing = [make_valid_profile(id="other", name="weekly mix")]
+    p = make_valid_profile(id="newprofile", name="WEEKLY MIX")
+    errors = validate_profile(p, existing=existing)
+    assert "name" in errors
+
+
+def test_validate_profile_same_name_update_allowed():
+    """Updating a profile keeping the same name must not raise a name collision."""
+    # existing = others (self excluded), so own name is not in others
+    p = make_valid_profile(id="weekly", name="Weekly Mix")
+    others = [make_valid_profile(id="daily", name="Daily Mix")]
+    errors = validate_profile(p, existing=others)
+    assert "name" not in errors
+
+
 # ── migrate_config ────────────────────────────────────────────────────────────
 
 def make_legacy_cfg(with_daily=True):
@@ -209,10 +236,25 @@ def test_migrate_config_legacy_weekly_and_daily():
 
 
 def test_migrate_config_legacy_weekly_only():
+    """When discover.daily is absent, daily profile still created with spec defaults."""
     cfg = make_legacy_cfg(with_daily=False)
     mixes = migrate_config(cfg)
-    assert len(mixes) == 1
-    assert mixes[0]["id"] == "weekly"
+    assert len(mixes) == 2, f"Expected 2 mixes (weekly + daily default), got {len(mixes)}"
+    ids = {m["id"] for m in mixes}
+    assert "weekly" in ids
+    assert "daily" in ids
+
+
+def test_migrate_config_daily_default_values_when_absent():
+    """Daily profile defaults match spec: enabled True, count 7, cap 49, run_hour 7."""
+    cfg = make_legacy_cfg(with_daily=False)
+    mixes = migrate_config(cfg)
+    d = next(m for m in mixes if m["id"] == "daily")
+    assert d["enabled"] is True
+    assert d["count"] == 7
+    assert d["cap"] == 49
+    assert d["schedule"]["run_hour"] == 7
+    assert d["schedule"]["cadence"] == "daily"
 
 
 def test_migrate_config_weekly_values():
@@ -244,6 +286,23 @@ def test_migrate_config_daily_values():
     assert d["new_ratio"] == 1.0
     assert d["seeds"]["mode"] == "history"
     assert d["enabled"] is True
+
+
+def test_migrate_config_schedule_daily_sets_daily_cadence():
+    """discover.schedule=='daily' sets weekly profile cadence to daily (issue 16)."""
+    cfg = {
+        "discover": {
+            "playlist_name": "Weekly Mix",
+            "schedule": "daily",    # legacy: "daily" schedule
+            "run_day": "sunday",
+            "run_hour": 22,
+            "weekly_count": 30,
+            "playlist_cap": 100,
+        }
+    }
+    mixes = migrate_config(cfg)
+    w = next(m for m in mixes if m["id"] == "weekly")
+    assert w["schedule"]["cadence"] == "daily"
 
 
 def test_migrate_config_idempotent_with_mixes_present():
