@@ -143,6 +143,58 @@ def test_non_genre_mode_no_search_songs_returns_empty():
     assert result == []
 
 
+# ── Issue 10: path existence guard ───────────────────────────────────────────
+
+def test_picks_skip_nonexistent_file_paths(tmp_path):
+    """Songs whose basename does not exist in song_dir are excluded when song_dir provided."""
+    existing_file = tmp_path / "exists.mp3"
+    existing_file.write_text("dummy")
+
+    songs = [
+        make_song("s1", "X", "T1", "subdir/exists.mp3"),       # basename exists in song_dir
+        make_song("s2", "Y", "T2", "other/missing.mp3"),        # basename NOT in song_dir
+    ]
+    subsonic = make_genre_subsonic({"techno": songs})
+    profile = make_profile(mode="genre", genres=["techno"])
+    result = select_library_tracks(
+        subsonic, profile, exclude_basenames=set(), count=10,
+        song_dir=str(tmp_path),
+    )
+    ids = {s["id"] for s in result}
+    assert "s1" in ids, "exists.mp3 should be included"
+    assert "s2" not in ids, "missing.mp3 should be excluded"
+
+
+def test_picks_log_skipped_count(tmp_path, caplog):
+    """Songs skipped due to missing path are counted and logged."""
+    import logging
+    existing_file = tmp_path / "exists.mp3"
+    existing_file.write_text("dummy")
+
+    songs = [make_song("s1", "X", "T1", "exists.mp3"),
+             make_song("s2", "Y", "T2", "gone.mp3")]
+    subsonic = make_genre_subsonic({"techno": songs})
+    profile = make_profile(mode="genre", genres=["techno"])
+    with caplog.at_level(logging.WARNING, logger="discover.library_pick"):
+        result = select_library_tracks(
+            subsonic, profile, exclude_basenames=set(), count=10,
+            song_dir=str(tmp_path),
+        )
+    assert len(result) == 1
+    assert any("skipped" in r.message.lower() or "1" in r.message for r in caplog.records
+               if "library_pick" in r.name or True), "Expected a log about skipped paths"
+
+
+def test_picks_no_song_dir_skips_no_existing_check(tmp_path):
+    """When song_dir is not provided, the existence check is skipped."""
+    songs = [make_song("s1", "X", "T1", "/nonexistent/path/track.mp3")]
+    subsonic = make_genre_subsonic({"techno": songs})
+    profile = make_profile(mode="genre", genres=["techno"])
+    # Without song_dir, the track is included regardless of file existence
+    result = select_library_tracks(subsonic, profile, exclude_basenames=set(), count=10)
+    assert any(s["id"] == "s1" for s in result)
+
+
 def test_genre_mode_error_contributes_nothing():
     """A failing get_songs_by_genre call for one genre contributes nothing."""
     def get_songs_by_genre(genre, count=200):

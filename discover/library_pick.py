@@ -7,13 +7,16 @@ logger = logging.getLogger(__name__)
 
 
 def select_library_tracks(subsonic, profile: dict, exclude_basenames: set,
-                          count: int, seed_artists: list | None = None) -> list:
+                          count: int, seed_artists: list | None = None,
+                          song_dir: str | None = None) -> list:
     """Return up to `count` song dicts (with 'path') from the library.
 
     genre mode: union of get_songs_by_genre per genre.
     other modes: songs by seed artists. seed_artists (if provided) overrides
     profile seeds.artists — used by run_profile to pass the dynamically-computed
     seed list for history/playlist modes (which have no static artists list).
+    song_dir: when provided, skips picks whose basename does not exist in that
+    directory (cheap os.path.exists guard for nested/multi-root libraries).
     Prefers never/least-recently played. Excludes basenames already in the
     playlist. Never touches DiscoverState.
     """
@@ -48,6 +51,14 @@ def select_library_tracks(subsonic, profile: dict, exclude_basenames: set,
     pool = [s for s in pool
             if os.path.basename(s.get("path") or "") not in exclude_basenames
             and s.get("path")]
+    # Guard: when song_dir provided, skip picks whose basename does not exist on disk
+    if song_dir:
+        before = len(pool)
+        pool = [s for s in pool
+                if os.path.exists(os.path.join(song_dir, os.path.basename(s["path"])))]
+        skipped = before - len(pool)
+        if skipped:
+            logger.warning("library_pick: skipped %d pick(s) — basename not found in song_dir", skipped)
     random.shuffle(pool)                                  # tie-break
     pool.sort(key=lambda s: (s.get("played") is not None, s.get("played") or ""))
     return pool[:count]

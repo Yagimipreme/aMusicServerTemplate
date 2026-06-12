@@ -274,7 +274,8 @@ def run_profile(deps, cfg, profile):
         existing = _existing_playlist_basenames(deps.song_dir, profile["name"])
         from discover.library_pick import select_library_tracks
         picks = select_library_tracks(deps.subsonic, profile, existing, lib_needed,
-                                      seed_artists=seed_artist_names)
+                                      seed_artists=seed_artist_names,
+                                      song_dir=deps.song_dir)
         lib_paths = [s["path"] for s in picks]
 
     # acquisition backfill: if library underdelivered, acquire more from fresh pool (spec §3b)

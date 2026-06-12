@@ -51,6 +51,12 @@ def build_deps(tmp_path, lastfm_ready=True, library_songs=None, extra_similar=No
     """
     # For library picks
     library_songs = library_songs or []
+    # Create the library song files on disk so the song_dir existence guard passes
+    for s in library_songs:
+        p = s.get("path", "")
+        if p:
+            import pathlib
+            pathlib.Path(p).touch(exist_ok=True)
     extra_similar = extra_similar or []
     default_similar = [
         {"name": "Zmajor", "match": "0.9"},

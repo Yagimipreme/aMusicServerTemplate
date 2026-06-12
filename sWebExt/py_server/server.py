@@ -183,26 +183,6 @@ def _run_discover_daily_once():
         return {"status": "error", "error": str(e)}
 
 
-def _seconds_until_next_run(schedule: str, run_day: str, run_hour: int) -> float:
-    import datetime as _dt
-    now = _dt.datetime.now()
-    if schedule == "daily":
-        candidate = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
-        if candidate <= now:
-            candidate += _dt.timedelta(days=1)
-        return (candidate - now).total_seconds()
-    else:  # weekly
-        day_map = {"sun": 6, "mon": 0, "tue": 1, "wed": 2,
-                   "thu": 3, "fri": 4, "sat": 5}
-        target_wd = day_map.get(run_day.lower()[:3], 6)
-        days_ahead = (target_wd - now.weekday()) % 7
-        candidate = (now + _dt.timedelta(days=days_ahead)).replace(
-            hour=run_hour, minute=0, second=0, microsecond=0)
-        if candidate <= now:
-            candidate += _dt.timedelta(weeks=1)
-        return (candidate - now).total_seconds()
-
-
 def _profile_next_run(profile: dict, now: datetime.datetime) -> datetime.datetime:
     """Compute the next scheduled run datetime for a profile.
 
@@ -832,16 +812,12 @@ _DISCOVER_CONFIG_KEYS = {
 }
 
 SETTINGS_SCHEMA = [
-    # Discovery group
-    {"path": "discover.schedule",            "type": "str",       "label": "Weekly schedule",          "group": "Discovery"},
-    {"path": "discover.run_day",             "type": "str",       "label": "Run day (weekly)",          "group": "Discovery"},
-    {"path": "discover.run_hour",            "type": "int",       "label": "Run hour (0–23)",           "group": "Discovery", "min": 0, "max": 23},
-    {"path": "discover.weekly_count",        "type": "int",       "label": "Weekly mix size",           "group": "Discovery", "min": 1, "max": 200},
-    {"path": "discover.playlist_cap",        "type": "int",       "label": "Playlist size cap",         "group": "Discovery", "min": 1, "max": 1000},
+    # Discovery group — per-mix schedule/count/cap fields live in Mixes UI, not here
     {"path": "discover.suggested_ttl_days",  "type": "int",       "label": "Suggestion memory (days)", "group": "Discovery", "min": 1, "max": 365},
     {"path": "discover.min_artist_listeners","type": "int",       "label": "Min artist listeners",      "group": "Discovery", "min": 0, "max": 10000000},
     {"path": "discover.candidate_oversample","type": "int",       "label": "Candidate oversample",      "group": "Discovery", "min": 1, "max": 20},
-    # Note: discover.daily.* removed — superseded by Mixes UI (mix profiles).
+    # Note: discover.schedule/run_day/run_hour/weekly_count/playlist_cap/daily.* removed
+    # — superseded by Mixes UI (mix profiles).
     # Sources group
     {"path": "sc_username",                  "type": "str",       "label": "SoundCloud username URL",   "group": "Sources"},
     {"path": "sp_playlist_ids",              "type": "list[str]", "label": "Spotify playlist IDs",      "group": "Sources"},
@@ -1169,6 +1145,8 @@ def mixes_run(mix_id):
     result = _run_profile_once(profile)
     if result.get("status") == "busy":
         return jsonify(result), 409
+    if result.get("status") == "error":
+        return jsonify(result), 500
     return jsonify(result)
 
 

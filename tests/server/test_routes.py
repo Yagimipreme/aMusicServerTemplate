@@ -153,14 +153,32 @@ def test_post_settings_unknown_key_returns_400(client):
     assert "unknown" in data
 
 
+def test_settings_schema_no_dead_discover_scheduler_rows(client, tmp_path):
+    """Issue 15: discover.schedule/run_day/run_hour/weekly_count/playlist_cap
+    must NOT appear in SETTINGS_SCHEMA (superseded by Mixes UI)."""
+    import json as _json
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
+        resp = client.get("/settings")
+    data = _json.loads(resp.data)
+    paths = {e["path"] for e in data["schema"]}
+    dead_paths = {
+        "discover.schedule", "discover.run_day", "discover.run_hour",
+        "discover.weekly_count", "discover.playlist_cap",
+    }
+    found_dead = dead_paths & paths
+    assert not found_dead, f"Dead settings paths still in schema: {found_dead}"
+
+
 def test_post_settings_type_mismatch_returns_400(client, tmp_path):
     import json as _json
     cfg = {}
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(_json.dumps(cfg))
     with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
-        # discover.weekly_count is an int field still in schema
-        resp = client.post("/settings", json={"discover.weekly_count": "not-an-int"})
+        # discover.candidate_oversample is an int field in schema
+        resp = client.post("/settings", json={"discover.candidate_oversample": "not-an-int"})
     assert resp.status_code == 400
     data = _json.loads(resp.data)
     assert "fields" in data
@@ -182,17 +200,16 @@ def test_post_settings_empty_secret_is_ignored(client, tmp_path):
 
 def test_post_settings_valid_nested_path_deep_merges(client, tmp_path):
     import json as _json
-    cfg = {"discover": {"schedule": "weekly", "weekly_count": 5}}
+    cfg = {"discover": {"suggested_ttl_days": 30, "min_artist_listeners": 1000}}
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(_json.dumps(cfg))
     with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
-        # discover.weekly_count is an int field still in schema (daily.* superseded by mixes UI)
-        resp = client.post("/settings", json={"discover.weekly_count": 10})
+        resp = client.post("/settings", json={"discover.candidate_oversample": 5})
     assert resp.status_code == 200
     saved = _json.loads(cfg_file.read_text())
-    # Deep merge: discover.schedule must still be there
-    assert saved["discover"]["schedule"] == "weekly"
-    assert saved["discover"]["weekly_count"] == 10
+    # Deep merge: other discover keys must still be present
+    assert saved["discover"]["suggested_ttl_days"] == 30
+    assert saved["discover"]["candidate_oversample"] == 5
 
 
 def test_post_settings_atomic_write_leaves_valid_json(client, tmp_path):
@@ -265,7 +282,7 @@ def test_post_settings_bool_for_int_returns_400(client, tmp_path):
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(_json.dumps({}))
     with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
-        resp = client.post("/settings", json={"discover.run_hour": True})
+        resp = client.post("/settings", json={"discover.candidate_oversample": True})
     assert resp.status_code == 400
     data = _json.loads(resp.data)
     assert "fields" in data
@@ -426,6 +443,20 @@ def test_post_mixes_run_busy_returns_409(client, tmp_path):
                return_value={"status": "busy", "reason": "another discover run in progress"}):
         resp = client.post("/mixes/mymix/run")
     assert resp.status_code == 409
+
+
+def test_post_mixes_run_error_returns_500(client, tmp_path):
+    """POST /mixes/<id>/run returns 500 when result.status=='error' (Issue 13)."""
+    import json as _json
+    profile = _make_valid_profile(id="mymix", name="My Mix")
+    cfg = {"mixes": [profile]}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._run_profile_once",
+               return_value={"status": "error", "error": "something broke"}):
+        resp = client.post("/mixes/mymix/run")
+    assert resp.status_code == 500, f"Expected 500 for error status, got {resp.status_code}"
 
 
 def test_post_mixes_suggest_appends_new_profiles(client, tmp_path):
