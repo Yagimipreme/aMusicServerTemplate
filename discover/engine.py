@@ -4,7 +4,7 @@ import os
 import datetime
 
 from discover.seeds import collect_seeds
-from discover.expand import expand_similar, enrich_top_tracks
+from discover.expand import expand_similar, enrich_artist_info
 from discover.resolve import resolve_tracks
 from discover.dedupe import filter_fresh, track_key
 from discover.acquire import acquire
@@ -18,7 +18,8 @@ _STATE_PATH_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "discover_st
 def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
                playlist_name="Weekly Mix", lastfm_client=None,
                lastfm_username="", lastfm_period="1month", lastfm_periods=None,
-               playlist_cap=100):
+               playlist_cap=100, min_artist_listeners=5000,
+               candidate_oversample=3):
     """Run the full pipeline once and (re)build the Weekly Mix playlist.
 
     deps must provide: subsonic, search_fn, download_fn, state, song_dir.
@@ -36,8 +37,12 @@ def run_weekly(deps, count=30, seed_limit=20, per_seed=20, per_artist=1,
     logger.info("discover: %d not-owned similar artists", len(artists))
 
     if lastfm_client is not None:
-        logger.info("discover: enriching top tracks via Last.fm")
-        enrich_top_tracks(lastfm_client, artists)
+        k = seed_limit * candidate_oversample
+        artists = sorted(artists, key=lambda a: -a.get("score", 0))[:k]
+        logger.info("discover: trimmed to top %d candidates before enrichment", len(artists))
+        artists = enrich_artist_info(lastfm_client, artists,
+                                     min_listeners=min_artist_listeners)
+        logger.info("discover: %d candidates after listener floor", len(artists))
 
     candidates = resolve_tracks(deps.search_fn, artists, per_artist=per_artist)
     fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
@@ -136,13 +141,17 @@ def run_mix(deps, cfg):
         lastfm_period = disc.get("lastfm_period", "1month")
         lastfm_periods = disc.get("lastfm_periods") or None
         playlist_cap = int(disc.get("playlist_cap", 100))
+        min_artist_listeners = int(disc.get("min_artist_listeners", 5000))
+        candidate_oversample = int(disc.get("candidate_oversample", 3))
         return run_weekly(deps, count=count, seed_limit=seed_limit,
                          playlist_name=playlist_name,
                          lastfm_client=lastfm_client,
                          lastfm_username=lastfm_username,
                          lastfm_period=lastfm_period,
                          lastfm_periods=lastfm_periods,
-                         playlist_cap=playlist_cap)
+                         playlist_cap=playlist_cap,
+                         min_artist_listeners=min_artist_listeners,
+                         candidate_oversample=candidate_oversample)
     else:
         # Bootstrap path
         playlist_name = disc.get("bootstrap_playlist_name", "Starter Mix")
@@ -158,8 +167,9 @@ def run_mix(deps, cfg):
         artists = expand_similar(deps.subsonic, seeds, per_seed=20,
                                  lastfm_client=lastfm_client)
         if lastfm_client is not None:
-            logger.info("discover: enriching top tracks via Last.fm")
-            enrich_top_tracks(lastfm_client, artists)
+            artists = sorted(artists, key=lambda a: -a.get("score", 0))[:60]
+            artists = enrich_artist_info(lastfm_client, artists, min_listeners=5000)
+            logger.info("discover: bootstrap — %d candidates after listener floor", len(artists))
         candidates = resolve_tracks(deps.search_fn, artists, per_artist=1)
         fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
         acquired_paths = []
