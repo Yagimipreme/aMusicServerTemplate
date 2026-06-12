@@ -87,3 +87,78 @@ def test_stage2_handles_dict_track_response():
                 "track": {"artist": "Burial", "listeners": "99999"}
             }}}
     assert _repair_by_lastfm(DictLFM(), "Archangel", 10000) == "Burial"
+
+
+from unittest.mock import patch, MagicMock
+import json as _json
+from library.repair import _repair_by_musicbrainz, repair_missing_artists
+
+
+# ── Stage 3: MusicBrainz ──────────────────────────────────────────────────────
+
+def _mb_response(artist_name, score=95):
+    return _json.dumps({
+        "recordings": [{
+            "score": score,
+            "artist-credit": [{"artist": {"name": artist_name}}]
+        }]
+    }).encode()
+
+
+def test_stage3_returns_artist_above_score_threshold():
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = _mb_response("Burial", score=95)
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = _repair_by_musicbrainz("Archangel", min_score=90)
+    assert result == "Burial"
+
+
+def test_stage3_returns_none_below_score_threshold():
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = _mb_response("Burial", score=70)
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = _repair_by_musicbrainz("Archangel", min_score=90)
+    assert result is None
+
+
+def test_stage3_returns_none_on_empty_recordings():
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = _json.dumps({"recordings": []}).encode()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = _repair_by_musicbrainz("unknown track", min_score=90)
+    assert result is None
+
+
+def test_stage3_returns_none_on_network_error():
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        result = _repair_by_musicbrainz("any title", min_score=90)
+    assert result is None
+
+
+# ── Orchestrator ──────────────────────────────────────────────────────────────
+
+def test_orchestrator_skips_tracks_with_existing_artist(tmp_path):
+    """Tracks that already have an artist tag must be counted as skipped."""
+    class FakeTag:
+        artist = "Burial"
+        title = "Archangel"
+        def save(self): pass
+
+    class FakeAF:
+        tag = FakeTag()
+
+    with patch("library.repair.eyed3.load", return_value=FakeAF()), \
+         patch("library.scanner.scan", return_value=[{"path": str(tmp_path / "f.mp3"), "key": "k", "artist": "Burial", "title": "Archangel", "has_tags": True}]):
+        stats = repair_missing_artists(str(tmp_path))
+
+    assert stats["skipped"] == 1
+    assert stats["repaired_stage1"] == 0
