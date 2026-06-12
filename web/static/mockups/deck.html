@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DECK — warm analog</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500&family=Karla:wght@400;600&family=Spline+Sans+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f3ead8; --card:#fbf5e9; --ink:#2b1d14; --soft:#8a7460;
+  --amber:#d98324; --amber-d:#b5650f; --moss:#5f7a4e; --rust:#b3492f;
+  --line:#e0d3bb;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:'Karla',sans-serif;
+  max-width:430px;margin:0 auto;min-height:100vh;padding-bottom:88px;
+  background-image:radial-gradient(circle at 20% -10%, #fdf8ee 0%, transparent 50%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.8'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+}
+header{padding:26px 20px 12px;display:flex;justify-content:space-between;align-items:baseline}
+header h1{font-family:'Fraunces';font-weight:700;font-size:1.5rem;letter-spacing:-.01em}
+header h1 i{color:var(--amber);font-style:italic}
+header span{font-family:'Spline Sans Mono';font-size:.68rem;color:var(--soft)}
+.screen{display:none;padding:8px 16px 0;animation:fade .3s ease}
+.screen.on{display:block}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+h2.lede{font-family:'Fraunces';font-style:italic;font-weight:500;font-size:.95rem;color:var(--soft);margin:0 4px 14px}
+
+/* MIX CARDS — cassette labels */
+.mix{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:12px;
+  box-shadow:0 2px 0 var(--line), 0 10px 24px -18px rgba(43,29,20,.4);overflow:hidden;position:relative}
+.mix::before{content:"";position:absolute;top:0;left:0;right:0;height:5px;background:var(--amber)}
+.mix.m2::before{background:var(--moss)}
+.mix.m3::before{background:var(--rust)}
+.mix.m4::before{background:#7a6aa3}
+.mix.m5::before{background:#3e7d8a}
+.mix-head{padding:17px 16px 15px;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.spool{width:34px;height:34px;border-radius:50%;border:2px solid var(--ink);flex:none;position:relative;background:var(--paper)}
+.spool::after{content:"";position:absolute;inset:9px;border-radius:50%;border:2px dotted var(--ink)}
+.mix.fresh .spool{animation:spin 6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mtit{flex:1}
+.mtit b{font-family:'Fraunces';font-weight:700;font-size:1.06rem;display:block}
+.mtit span{font-family:'Spline Sans Mono';font-size:.66rem;color:var(--soft)}
+.badge{font-family:'Spline Sans Mono';font-size:.6rem;padding:4px 9px;border-radius:20px;flex:none}
+.badge.fresh{background:#e8f0dd;color:var(--moss);border:1px solid #c9d8b6}
+.badge.sug{background:#f7ead2;color:var(--amber-d);border:1px solid #ecd5a8}
+.fold{color:var(--soft);transition:transform .25s;font-size:.8rem}
+.mix.open .fold{transform:rotate(90deg);color:var(--amber-d)}
+.mix-body{max-height:0;overflow:hidden;transition:max-height .35s ease}
+.mix.open .mix-body{max-height:430px}
+.mix-body .inner{padding:4px 16px 16px;border-top:1px dashed var(--line);margin:0 4px}
+.frow{display:flex;align-items:center;gap:10px;margin:13px 0}
+.frow label{font-family:'Spline Sans Mono';font-size:.62rem;color:var(--soft);width:72px;flex:none;text-transform:lowercase}
+.frow output{font-family:'Spline Sans Mono';font-size:.7rem;color:var(--amber-d);width:44px;text-align:right}
+input[type=range]{flex:1;appearance:none;height:6px;border-radius:4px;background:linear-gradient(90deg,var(--amber) 30%,var(--line) 30%);outline:0}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:22px;height:22px;border-radius:50%;background:var(--card);border:3px solid var(--amber-d);box-shadow:0 2px 5px rgba(43,29,20,.3)}
+select,.ti{background:var(--paper);border:1px solid var(--line);border-radius:9px;color:var(--ink);font-family:'Karla';font-size:.8rem;padding:9px 11px;flex:1;min-width:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+.chip{font-size:.72rem;background:var(--paper);border:1px solid var(--line);padding:5px 11px;border-radius:18px;font-weight:600}
+.chip s{text-decoration:none;color:var(--rust);margin-left:5px}
+.chip.add{color:var(--soft);border-style:dashed;font-weight:400}
+.btns{display:flex;gap:8px;margin-top:8px}
+.b{flex:1;font-family:'Karla';font-weight:600;font-size:.78rem;padding:12px;border-radius:11px;border:0;cursor:pointer}
+.b.run{background:var(--ink);color:var(--paper)}
+.b.save{background:transparent;border:1.5px solid var(--ink);color:var(--ink)}
+.b.del{background:transparent;border:1.5px solid #e3c3b7;color:var(--rust);flex:0 0 52px}
+.new{display:block;width:100%;text-align:center;font-family:'Fraunces';font-style:italic;font-size:.95rem;
+  color:var(--amber-d);background:none;border:1.5px dashed #d9bf94;border-radius:14px;padding:16px;cursor:pointer;margin:4px 0 20px}
+
+/* LIBRARY */
+.shelf{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px 16px;margin-bottom:11px;
+  display:flex;align-items:center;gap:13px;box-shadow:0 2px 0 var(--line)}
+.shelf .ic{font-size:1.25rem;width:34px;text-align:center;flex:none}
+.shelf .tx{flex:1}
+.shelf .tx b{font-family:'Fraunces';font-size:.98rem;display:block}
+.shelf .tx span{font-family:'Spline Sans Mono';font-size:.64rem;color:var(--soft)}
+.shelf .act{font-family:'Karla';font-weight:600;font-size:.74rem;color:var(--amber-d);background:#f7ead2;border:1px solid #ecd5a8;border-radius:9px;padding:8px 13px;cursor:pointer}
+.prog{height:7px;border-radius:4px;background:var(--paper);border:1px solid var(--line);margin-top:7px;overflow:hidden}
+.prog i{display:block;height:100%;width:62%;background:linear-gradient(90deg,var(--amber),var(--amber-d))}
+
+/* SEARCH */
+.sbox{display:flex;gap:8px;margin-bottom:12px}
+.sbox input{flex:1;background:var(--card);border:1.5px solid var(--ink);border-radius:12px;padding:13px 15px;font-family:'Karla';font-size:.92rem;color:var(--ink)}
+.pills{display:flex;gap:7px;margin-bottom:14px}
+.pill{font-family:'Spline Sans Mono';font-size:.64rem;padding:6px 13px;border-radius:20px;border:1px solid var(--line);color:var(--soft);cursor:pointer}
+.pill.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.tr{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--line)}
+.sleeve{width:46px;height:46px;border-radius:9px;flex:none;border:1px solid var(--line);
+  background:conic-gradient(from 40deg,#e8d9bd,#f3ead8,#dcc9a4,#f3ead8);display:flex;align-items:center;justify-content:center;
+  font-family:'Spline Sans Mono';font-size:.58rem;color:var(--soft)}
+.tr .ti2{flex:1;min-width:0}
+.tr .ti2 b{font-size:.9rem;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tr .ti2 span{font-family:'Spline Sans Mono';font-size:.64rem;color:var(--soft)}
+.pluss{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--ink);background:var(--card);font-size:1.2rem;color:var(--ink);flex:none;cursor:pointer}
+.pluss.have{border-color:var(--line);color:#bdac93}
+
+/* SETTINGS */
+.sgrp{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:11px;overflow:hidden;box-shadow:0 2px 0 var(--line)}
+.sgrp h3{font-family:'Fraunces';font-weight:700;font-size:.95rem;padding:15px 16px;cursor:pointer;display:flex;justify-content:space-between}
+.sgrp h3 i{color:var(--soft);font-style:normal;transition:transform .25s}
+.sgrp.open h3 i{transform:rotate(90deg)}
+.sgrp .rows{display:none;padding:0 16px 13px}
+.sgrp.open .rows{display:block}
+.srw{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px dashed var(--line)}
+.srw label{font-size:.85rem}
+.srw small{display:block;font-family:'Spline Sans Mono';font-size:.6rem;color:var(--soft)}
+.srw input{background:var(--paper);border:1px solid var(--line);border-radius:9px;font-family:'Spline Sans Mono';font-size:.72rem;color:var(--ink);padding:8px 10px;width:130px;text-align:right}
+.knob{width:46px;height:26px;border-radius:16px;background:var(--line);position:relative;cursor:pointer;flex:none;transition:.2s}
+.knob::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--card);box-shadow:0 1px 3px rgba(43,29,20,.35);transition:.2s}
+.knob.on{background:var(--moss)}
+.knob.on::after{left:23px}
+.note{font-family:'Spline Sans Mono';font-size:.62rem;color:var(--rust);background:#f6e3d8;border:1px solid #ecc9b6;border-radius:9px;padding:9px 11px;margin-top:10px}
+
+/* NAV */
+nav{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);width:calc(100% - 28px);max-width:402px;
+  display:flex;background:var(--ink);border-radius:18px;z-index:40;box-shadow:0 12px 28px -10px rgba(43,29,20,.55);
+  padding:4px}
+nav button{flex:1;background:none;border:0;color:#a8917b;padding:11px 0;cursor:pointer;border-radius:14px;
+  font-family:'Karla';font-weight:600;font-size:.68rem}
+nav button .ico{display:block;font-size:1.05rem;margin-bottom:2px}
+nav button.on{background:#3d2b1e;color:var(--paper)}
+</style>
+</head>
+<body>
+<header><h1>Mix<i>deck</i></h1><span>side A · 12 jun</span></header>
+
+<section class="screen on" id="s-mixes">
+  <h2 class="lede">your rotations, freshly wound —</h2>
+
+  <div class="mix fresh"><div class="mix-head" onclick="tog(this)">
+    <span class="spool"></span>
+    <span class="mtit"><b>Weekly Mix</b><span>30 tracks · sundays 22:00 · all new</span></span>
+    <span class="badge fresh">fresh</span><span class="fold">▶</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>discovery</label><input type="range" value="100" oninput="sl(this)"><output>100%</output></div>
+      <div class="frow"><label>schedule</label><select><option>weekly · sunday</option><option>daily</option></select><select style="flex:0 0 84px"><option>22:00</option></select></div>
+      <div class="frow"><label>size · keep</label><input class="ti" value="30" style="flex:0 0 64px"><input class="ti" value="100" style="flex:0 0 64px"><span style="flex:1"></span></div>
+      <div class="btns"><button class="b run">play it forward — run</button><button class="b save">save</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix m2 fresh"><div class="mix-head" onclick="tog(this)">
+    <span class="spool"></span>
+    <span class="mtit"><b>Daily Mix</b><span>7 a day · 07:00 · rolling week</span></span>
+    <span class="badge fresh">fresh</span><span class="fold">▶</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>discovery</label><input type="range" value="100" oninput="sl(this)"><output>100%</output></div>
+      <div class="frow"><label>schedule</label><select><option>daily</option></select><select style="flex:0 0 84px"><option>07:00</option></select></div>
+      <div class="btns"><button class="b run">run</button><button class="b save">save</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix m3 open"><div class="mix-head" onclick="tog(this)">
+    <span class="spool"></span>
+    <span class="mtit"><b>Techno Mix</b><span>15 tracks · tuesdays 07:00 · 30% new</span></span>
+    <span class="fold">▶</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>discovery</label><input type="range" value="30" oninput="sl(this)" style="background:linear-gradient(90deg,var(--amber) 30%,var(--line) 30%)"><output>30%</output></div>
+      <div class="frow"><label>schedule</label><select><option>weekly · tuesday</option><option>daily</option></select><select style="flex:0 0 84px"><option>07:00</option></select></div>
+      <div class="frow"><label>genres</label><span class="chips"><span class="chip">techno<s>✕</s></span><span class="chip">hard techno<s>✕</s></span><span class="chip add">+ genre</span></span></div>
+      <div class="frow"><label>size · keep</label><input class="ti" value="15" style="flex:0 0 64px"><input class="ti" value="60" style="flex:0 0 64px"><span style="flex:1"></span></div>
+      <div class="btns"><button class="b run">run</button><button class="b save">save</button><button class="b del">✕</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix m4"><div class="mix-head" onclick="tog(this)">
+    <span class="spool"></span>
+    <span class="mtit"><b>Phonk Mix</b><span>15 tracks · wednesdays 07:00 · 30% new</span></span>
+    <span class="badge sug">suggested</span><span class="fold">▶</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>discovery</label><input type="range" value="30" oninput="sl(this)" style="background:linear-gradient(90deg,var(--amber) 30%,var(--line) 30%)"><output>30%</output></div>
+      <div class="btns"><button class="b run">run</button><button class="b save">save</button><button class="b del">✕</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix m5"><div class="mix-head" onclick="tog(this)">
+    <span class="spool"></span>
+    <span class="mtit"><b>Breakcore Mix</b><span>15 tracks · thursdays 07:00 · 30% new</span></span>
+    <span class="badge sug">suggested</span><span class="fold">▶</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>discovery</label><input type="range" value="30" oninput="sl(this)" style="background:linear-gradient(90deg,var(--amber) 30%,var(--line) 30%)"><output>30%</output></div>
+      <div class="btns"><button class="b run">run</button><button class="b save">save</button><button class="b del">✕</button></div>
+    </div></div>
+  </div>
+
+  <button class="new">⊕ start a new mix…</button>
+</section>
+
+<section class="screen" id="s-library">
+  <h2 class="lede">keep the shelves tidy —</h2>
+  <div class="shelf"><span class="ic">✦</span><div class="tx"><b>Enrich metadata</b><span>running · 412 of 663<span class="prog"><i></i></span></span></div><button class="act">view</button></div>
+  <div class="shelf"><span class="ic">✚</span><div class="tx"><b>Repair library</b><span>last run 2 days ago · 14 fixed</span></div><button class="act">run</button></div>
+  <div class="shelf"><span class="ic">≡</span><div class="tx"><b>De-duplicate</b><span>3 candidates waiting</span></div><button class="act">review</button></div>
+  <div class="shelf"><span class="ic">✂</span><div class="tx"><b>Title cleanup</b><span>28 suffix rules</span></div><button class="act">edit</button></div>
+  <div class="shelf"><span class="ic">⇩</span><div class="tx"><b>Import</b><span>soundcloud likes · spotify playlists</span></div><button class="act">open</button></div>
+</section>
+
+<section class="screen" id="s-search">
+  <h2 class="lede">find something new —</h2>
+  <div class="sbox"><input value="vatican shadow" placeholder="artist, song, or paste a link…"></div>
+  <div class="pills"><span class="pill on">everywhere</span><span class="pill">soundcloud</span><span class="pill">youtube</span><span class="pill">spotify</span></div>
+  <div class="tr"><span class="sleeve">SC</span><div class="ti2"><b>Enter Paradise</b><span>Vatican Shadow · 6:12</span></div><button class="pluss have">✓</button></div>
+  <div class="tr"><span class="sleeve">YT</span><div class="ti2"><b>Church of All Images</b><span>Vatican Shadow · 5:48</span></div><button class="pluss">+</button></div>
+  <div class="tr"><span class="sleeve">SC</span><div class="ti2"><b>Ancient Days</b><span>Vatican Shadow · 7:02</span></div><button class="pluss">+</button></div>
+  <div class="tr"><span class="sleeve">YT</span><div class="ti2"><b>Weapons Inspection</b><span>Vatican Shadow · 4:31</span></div><button class="pluss">+</button></div>
+</section>
+
+<section class="screen" id="s-settings">
+  <h2 class="lede">under the hood —</h2>
+  <div class="sgrp open"><h3 onclick="this.parentNode.classList.toggle('open')">Discovery <i>▶</i></h3><div class="rows">
+    <div class="srw"><label>Min artist listeners<small>quality floor</small></label><input value="5000"></div>
+    <div class="srw"><label>Seed playlist</label><input value="Liked_Songs"></div>
+    <div class="srw"><label>Suggestion memory<small>days</small></label><input value="90"></div>
+  </div></div>
+  <div class="sgrp"><h3 onclick="this.parentNode.classList.toggle('open')">Sources <i>▶</i></h3><div class="rows">
+    <div class="srw"><label>SoundCloud likes URL</label><input value="…/user35/likes"></div>
+  </div></div>
+  <div class="sgrp"><h3 onclick="this.parentNode.classList.toggle('open')">Maintenance <i>▶</i></h3><div class="rows">
+    <div class="srw"><label>Auto de-dup</label><span class="knob on" onclick="this.classList.toggle('on')"></span></div>
+    <div class="srw"><label>Auto-delete dupes</label><span class="knob" onclick="this.classList.toggle('on')"></span></div>
+    <div class="srw"><label>Title cleanup</label><span class="knob on" onclick="this.classList.toggle('on')"></span></div>
+  </div></div>
+  <div class="sgrp"><h3 onclick="this.parentNode.classList.toggle('open')">Credentials <i>▶</i></h3><div class="rows">
+    <div class="srw"><label>Navidrome password</label><input type="password" placeholder="(unchanged)"></div>
+    <div class="srw"><label>Last.fm API secret</label><input type="password" placeholder="(unchanged)"></div>
+    <div class="note">careful — this page has no login. anyone on your wifi can change these.</div>
+  </div></div>
+</section>
+
+<nav>
+  <button class="on" data-s="mixes"><span class="ico">◎</span>mixes</button>
+  <button data-s="library"><span class="ico">▤</span>library</button>
+  <button data-s="search"><span class="ico">⌕</span>search</button>
+  <button data-s="settings"><span class="ico">☼</span>setup</button>
+</nav>
+
+<script>
+function tog(h){h.parentNode.classList.toggle('open');}
+function sl(r){r.nextElementSibling.value=r.value+'%';
+  r.style.background=`linear-gradient(90deg,var(--amber) ${r.value}%,var(--line) ${r.value}%)`;}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');document.getElementById('s-'+b.dataset.s).classList.add('on');
+});
+</script>
+</body>
+</html>

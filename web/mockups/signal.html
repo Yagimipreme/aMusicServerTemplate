@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SIGNAL — club dark</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800&family=Archivo:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#08080a; --panel:#101013; --panel2:#16161a; --line:#222228;
+  --acid:#c3ff3d; --acid-dim:#9ccc2e; --txt:#e8e8e6; --mut:#6f6f78;
+  --danger:#ff4d5e;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{font-size:16px}
+body{
+  background:var(--bg);color:var(--txt);
+  font-family:'Archivo',sans-serif;
+  max-width:430px;margin:0 auto;min-height:100vh;
+  padding-bottom:84px;position:relative;overflow-x:hidden;
+}
+/* grain */
+body::after{content:"";position:fixed;inset:0;pointer-events:none;opacity:.07;z-index:50;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");}
+header{
+  padding:22px 18px 14px;display:flex;align-items:baseline;justify-content:space-between;
+  border-bottom:1px solid var(--line);
+}
+header h1{font-family:'Unbounded';font-weight:800;font-size:1.05rem;letter-spacing:.18em}
+header h1 em{color:var(--acid);font-style:normal}
+header .clock{font-family:'JetBrains Mono';color:var(--mut);font-size:.75rem}
+.screen{display:none;padding:14px 14px 0;animation:rise .25s ease both}
+.screen.on{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ---- MIXES ---- */
+.mix{border:1px solid var(--line);background:var(--panel);margin-bottom:10px;border-radius:4px;overflow:hidden}
+.mix-head{display:flex;align-items:center;gap:12px;padding:16px 14px;cursor:pointer;user-select:none}
+.mix-head .name{font-family:'Unbounded';font-weight:500;font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;flex:1}
+.mix-head .meta{display:block;font-family:'JetBrains Mono';font-size:.66rem;color:var(--mut);margin-top:5px;letter-spacing:0;text-transform:none}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--mut);flex:none}
+.mix.fresh .dot{background:var(--acid);box-shadow:0 0 10px var(--acid)}
+.tag{font-family:'JetBrains Mono';font-size:.6rem;color:var(--bg);background:var(--acid);padding:2px 7px;border-radius:2px;letter-spacing:.08em}
+.tag.sug{background:transparent;color:var(--mut);border:1px solid var(--line)}
+.chev{color:var(--mut);transition:transform .2s;font-size:.7rem}
+.mix.open .chev{transform:rotate(180deg);color:var(--acid)}
+.mix-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.mix.open .mix-body{max-height:420px;border-top:1px solid var(--line)}
+.mix.open{border-color:#33361f;box-shadow:0 0 0 1px #2a2d18, 0 12px 32px -18px rgba(195,255,61,.25)}
+.mix-body .inner{padding:16px 14px}
+.frow{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.frow label{font-family:'JetBrains Mono';font-size:.64rem;color:var(--mut);width:74px;flex:none;text-transform:uppercase;letter-spacing:.1em}
+.frow .val{font-family:'JetBrains Mono';font-size:.72rem;color:var(--acid);width:46px;text-align:right}
+input[type=range]{flex:1;appearance:none;height:2px;background:var(--line);outline:0}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:18px;height:18px;border-radius:50%;background:var(--acid);box-shadow:0 0 12px rgba(195,255,61,.6)}
+select,.txt{background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-family:'JetBrains Mono';font-size:.72rem;padding:8px 10px;border-radius:3px;flex:1;min-width:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+.chip{font-family:'JetBrains Mono';font-size:.66rem;border:1px solid var(--acid-dim);color:var(--acid);padding:4px 9px;border-radius:2px}
+.chip.add{border-style:dashed;border-color:var(--line);color:var(--mut)}
+.actions{display:flex;gap:8px;margin-top:6px}
+.btn{flex:1;font-family:'Unbounded';font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;padding:12px;border:0;border-radius:3px;cursor:pointer}
+.btn.run{background:var(--acid);color:#0a0a00}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--mut)}
+.btn.del{background:transparent;border:1px solid #3a2226;color:var(--danger)}
+.newmix{width:100%;padding:16px;background:transparent;border:1px dashed var(--line);color:var(--mut);
+  font-family:'Unbounded';font-size:.66rem;letter-spacing:.18em;border-radius:4px;cursor:pointer;margin:4px 0 18px}
+.newmix:active{color:var(--acid);border-color:var(--acid)}
+
+/* ---- LIBRARY ---- */
+.tool{border:1px solid var(--line);background:var(--panel);border-radius:4px;margin-bottom:10px;padding:15px 14px;display:flex;align-items:center;gap:12px}
+.tool .t-name{flex:1}
+.tool .t-name b{font-family:'Unbounded';font-weight:500;font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;display:block}
+.tool .t-name span{font-family:'JetBrains Mono';font-size:.64rem;color:var(--mut);display:block;margin-top:4px}
+.tool .go{font-family:'JetBrains Mono';font-size:.66rem;color:var(--acid);border:1px solid #2e3520;padding:8px 14px;border-radius:3px;background:#11150a}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;width:62%;background:var(--acid);box-shadow:0 0 8px var(--acid)}
+
+/* ---- SEARCH ---- */
+.searchbox{display:flex;gap:8px;margin-bottom:14px}
+.searchbox input{flex:1;background:var(--panel);border:1px solid var(--line);padding:13px 14px;color:var(--txt);font-family:'JetBrains Mono';font-size:.8rem;border-radius:4px}
+.searchbox input::placeholder{color:var(--mut)}
+.src-row{display:flex;gap:6px;margin-bottom:14px}
+.src{font-family:'JetBrains Mono';font-size:.62rem;padding:6px 11px;border:1px solid var(--line);border-radius:20px;color:var(--mut)}
+.src.on{color:var(--acid);border-color:var(--acid-dim)}
+.result{display:flex;align-items:center;gap:12px;padding:12px 4px;border-bottom:1px solid var(--line)}
+.cover{width:44px;height:44px;border-radius:3px;background:linear-gradient(135deg,#1c2210,#0e0f12);border:1px solid var(--line);flex:none;
+  display:flex;align-items:center;justify-content:center;color:var(--acid);font-family:'JetBrains Mono';font-size:.6rem}
+.result .r-meta{flex:1;min-width:0}
+.result .r-meta b{font-size:.82rem;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.result .r-meta span{font-family:'JetBrains Mono';font-size:.64rem;color:var(--mut)}
+.get{width:38px;height:38px;border-radius:50%;border:1px solid var(--acid-dim);color:var(--acid);background:transparent;font-size:1.1rem;flex:none;cursor:pointer}
+.get.have{border-color:var(--line);color:var(--mut)}
+
+/* ---- SETTINGS ---- */
+.sgroup{border:1px solid var(--line);background:var(--panel);border-radius:4px;margin-bottom:10px;overflow:hidden}
+.sgroup h3{font-family:'Unbounded';font-weight:500;font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;padding:14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;cursor:pointer}
+.sgroup h3 span{color:var(--mut)}
+.sgroup .rows{padding:6px 14px 14px;display:none}
+.sgroup.open .rows{display:block}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #1a1a1f;gap:12px}
+.srow:last-child{border:0}
+.srow label{font-size:.78rem;color:var(--txt)}
+.srow .hint{display:block;font-family:'JetBrains Mono';font-size:.6rem;color:var(--mut);margin-top:3px}
+.srow input[type=text],.srow input[type=password]{background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-family:'JetBrains Mono';font-size:.7rem;padding:8px;border-radius:3px;width:140px;text-align:right}
+.sw{width:42px;height:24px;border-radius:14px;background:var(--line);position:relative;flex:none;cursor:pointer;transition:.2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--mut);transition:.2s}
+.sw.on{background:#2c3a12}
+.sw.on::after{left:21px;background:var(--acid);box-shadow:0 0 8px var(--acid)}
+.warn{font-family:'JetBrains Mono';font-size:.62rem;color:#ffb04d;border:1px solid #3a2f1a;background:#181206;padding:10px;border-radius:3px;margin-bottom:10px}
+
+/* ---- NAV ---- */
+nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;
+  display:flex;background:rgba(10,10,12,.92);backdrop-filter:blur(12px);border-top:1px solid var(--line);z-index:40;
+  padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;border:0;color:var(--mut);padding:13px 0 11px;cursor:pointer;
+  font-family:'JetBrains Mono';font-size:.58rem;letter-spacing:.12em;text-transform:uppercase}
+nav button .ico{display:block;font-size:1.15rem;margin-bottom:4px;font-family:'Archivo'}
+nav button.on{color:var(--acid)}
+nav button.on .ico{text-shadow:0 0 14px rgba(195,255,61,.7)}
+</style>
+</head>
+<body>
+<header><h1>A·MUSIC<em>///</em>SERVER</h1><span class="clock" id="clk">23:41</span></header>
+
+<!-- MIXES -->
+<section class="screen on" id="s-mixes">
+  <div class="mix fresh"><div class="mix-head" onclick="tog(this)">
+    <span class="dot"></span>
+    <span class="name">Weekly Mix<span class="meta">30 trk · sun 22:00 · 100% new</span></span>
+    <span class="tag">fresh</span><span class="chev">▼</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>blend</label><input type="range" value="100" oninput="this.parentNode.querySelector('.val').textContent=this.value+'%'"><span class="val">100%</span></div>
+      <div class="frow"><label>schedule</label><select><option>weekly · sunday</option><option>daily</option></select><select style="flex:0 0 76px"><option>22:00</option></select></div>
+      <div class="frow"><label>size / cap</label><input class="txt" value="30" style="flex:0 0 60px"><input class="txt" value="100" style="flex:0 0 60px"><span style="flex:1"></span></div>
+      <div class="actions"><button class="btn run">▶ run now</button><button class="btn ghost">save</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix fresh"><div class="mix-head" onclick="tog(this)">
+    <span class="dot"></span>
+    <span class="name">Daily Mix<span class="meta">7/day · 07:00 · rolling 7d</span></span>
+    <span class="tag">fresh</span><span class="chev">▼</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>blend</label><input type="range" value="100"><span class="val">100%</span></div>
+      <div class="frow"><label>schedule</label><select><option>daily</option></select><select style="flex:0 0 76px"><option>07:00</option></select></div>
+      <div class="actions"><button class="btn run">▶ run now</button><button class="btn ghost">save</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix open"><div class="mix-head" onclick="tog(this)">
+    <span class="dot"></span>
+    <span class="name">Techno Mix<span class="meta">15 trk · tue 07:00 · 30% new</span></span>
+    <span class="chev">▼</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>blend</label><input type="range" value="30" oninput="this.parentNode.querySelector('.val').textContent=this.value+'%'"><span class="val">30%</span></div>
+      <div class="frow"><label>schedule</label><select><option>weekly · tuesday</option><option>daily</option></select><select style="flex:0 0 76px"><option>07:00</option></select></div>
+      <div class="frow"><label>genres</label><span class="chips"><span class="chip">techno ✕</span><span class="chip">hard techno ✕</span><span class="chip add">+ add</span></span></div>
+      <div class="frow"><label>size / cap</label><input class="txt" value="15" style="flex:0 0 60px"><input class="txt" value="60" style="flex:0 0 60px"><span style="flex:1"></span></div>
+      <div class="actions"><button class="btn run">▶ run now</button><button class="btn ghost">save</button><button class="btn del">✕</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix"><div class="mix-head" onclick="tog(this)">
+    <span class="dot"></span>
+    <span class="name">Phonk Mix<span class="meta">15 trk · wed 07:00 · 30% new</span></span>
+    <span class="tag sug">suggested</span><span class="chev">▼</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>blend</label><input type="range" value="30"><span class="val">30%</span></div>
+      <div class="actions"><button class="btn run">▶ run now</button><button class="btn ghost">save</button><button class="btn del">✕</button></div>
+    </div></div>
+  </div>
+
+  <div class="mix"><div class="mix-head" onclick="tog(this)">
+    <span class="dot"></span>
+    <span class="name">Breakcore Mix<span class="meta">15 trk · thu 07:00 · 30% new</span></span>
+    <span class="tag sug">suggested</span><span class="chev">▼</span></div>
+    <div class="mix-body"><div class="inner">
+      <div class="frow"><label>blend</label><input type="range" value="30"><span class="val">30%</span></div>
+      <div class="actions"><button class="btn run">▶ run now</button><button class="btn ghost">save</button><button class="btn del">✕</button></div>
+    </div></div>
+  </div>
+
+  <button class="newmix">+ new mix</button>
+</section>
+
+<!-- LIBRARY -->
+<section class="screen" id="s-library">
+  <div class="tool"><div class="t-name"><b>Enrich metadata</b><span>running — 412 / 663 files<span class="bar"><i></i></span></span></div><button class="go">view</button></div>
+  <div class="tool"><div class="t-name"><b>Repair library</b><span>last run 2d ago · 14 fixed</span></div><button class="go">run</button></div>
+  <div class="tool"><div class="t-name"><b>De-duplicate</b><span>3 candidates found</span></div><button class="go">review</button></div>
+  <div class="tool"><div class="t-name"><b>Title cleanup</b><span>suffix list · 28 rules</span></div><button class="go">edit</button></div>
+  <div class="tool"><div class="t-name"><b>Import</b><span>SoundCloud likes · Spotify playlists</span></div><button class="go">open</button></div>
+</section>
+
+<!-- SEARCH -->
+<section class="screen" id="s-search">
+  <div class="searchbox"><input placeholder="artist, track or paste URL…" value="vatican shadow"></div>
+  <div class="src-row"><span class="src on">all</span><span class="src">soundcloud</span><span class="src">youtube</span><span class="src">spotify</span></div>
+  <div class="result"><div class="cover">SC</div><div class="r-meta"><b>Enter Paradise</b><span>Vatican Shadow · 6:12</span></div><button class="get have">✓</button></div>
+  <div class="result"><div class="cover">YT</div><div class="r-meta"><b>Church of All Images</b><span>Vatican Shadow · 5:48</span></div><button class="get">+</button></div>
+  <div class="result"><div class="cover">SC</div><div class="r-meta"><b>Ancient Days</b><span>Vatican Shadow · 7:02</span></div><button class="get">+</button></div>
+  <div class="result"><div class="cover">YT</div><div class="r-meta"><b>Weapons Inspection</b><span>Vatican Shadow · 4:31</span></div><button class="get">+</button></div>
+</section>
+
+<!-- SETTINGS -->
+<section class="screen" id="s-settings">
+  <div class="sgroup open"><h3 onclick="this.parentNode.classList.toggle('open')">Discovery <span>▾</span></h3>
+    <div class="rows">
+      <div class="srow"><label>Min artist listeners<span class="hint">quality floor for new artists</span></label><input type="text" value="5000"></div>
+      <div class="srow"><label>Seed playlist</label><input type="text" value="Liked_Songs"></div>
+      <div class="srow"><label>Suggestion memory<span class="hint">days before re-suggesting</span></label><input type="text" value="90"></div>
+    </div></div>
+  <div class="sgroup"><h3 onclick="this.parentNode.classList.toggle('open')">Sources <span>▸</span></h3>
+    <div class="rows">
+      <div class="srow"><label>SoundCloud likes URL</label><input type="text" value="…/user35/likes"></div>
+    </div></div>
+  <div class="sgroup"><h3 onclick="this.parentNode.classList.toggle('open')">Maintenance <span>▸</span></h3>
+    <div class="rows">
+      <div class="srow"><label>Auto de-dup</label><span class="sw on" onclick="this.classList.toggle('on')"></span></div>
+      <div class="srow"><label>Auto-delete dupes</label><span class="sw" onclick="this.classList.toggle('on')"></span></div>
+      <div class="srow"><label>Title cleanup</label><span class="sw on" onclick="this.classList.toggle('on')"></span></div>
+    </div></div>
+  <div class="sgroup"><h3 onclick="this.parentNode.classList.toggle('open')">Credentials <span>▸</span></h3>
+    <div class="rows">
+      <div class="warn">⚠ no auth on this page — anyone on your network can change these.</div>
+      <div class="srow"><label>Navidrome password</label><input type="password" placeholder="(unchanged)"></div>
+      <div class="srow"><label>Last.fm API secret</label><input type="password" placeholder="(unchanged)"></div>
+    </div></div>
+</section>
+
+<nav>
+  <button class="on" data-s="mixes"><span class="ico">◉</span>mixes</button>
+  <button data-s="library"><span class="ico">▤</span>library</button>
+  <button data-s="search"><span class="ico">⌕</span>search</button>
+  <button data-s="settings"><span class="ico">≡</span>setup</button>
+</nav>
+
+<script>
+function tog(h){h.parentNode.classList.toggle('open');}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  document.getElementById('s-'+b.dataset.s).classList.add('on');
+});
+const t=new Date();document.getElementById('clk').textContent=String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+</script>
+</body>
+</html>
