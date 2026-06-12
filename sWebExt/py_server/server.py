@@ -1250,6 +1250,46 @@ def acquire_url():
             _acquire_inflight.discard(url)
 
 
+# ── Library suffixes ──────────────────────────────────────────────────────────
+
+@app.route("/library/suffixes", methods=["GET"])
+def library_suffixes_get():
+    cfg = _get_config()
+    suffix_file = cfg.get("title_cleanup", {}).get(
+        "extra_suffixes_file", "title_suffixes.txt"
+    )
+    path = os.path.join(_PROJECT_ROOT, suffix_file)
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+    except FileNotFoundError:
+        lines = []
+    return jsonify({"suffixes": lines})
+
+
+@app.route("/library/suffixes", methods=["POST"])
+def library_suffixes_post():
+    body = request.get_json(force=True, silent=True) or {}
+    suffixes = body.get("suffixes")
+    if not isinstance(suffixes, list):
+        return jsonify({"status": "error", "error": "suffixes must be a list"}), 400
+    cfg = _get_config()
+    suffix_file = cfg.get("title_cleanup", {}).get(
+        "extra_suffixes_file", "title_suffixes.txt"
+    )
+    path = os.path.join(_PROJECT_ROOT, suffix_file)
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for s in suffixes:
+                f.write(str(s) + "\n")
+        os.replace(tmp_path, path)
+    except Exception as e:
+        logger.exception("library_suffixes_post: write failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+    return jsonify({"status": "ok", "count": len(suffixes)})
+
+
 # ── Explore UI ────────────────────────────────────────────────────────────────
 
 @app.route("/explore", methods=["GET"])

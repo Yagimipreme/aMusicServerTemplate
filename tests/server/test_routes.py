@@ -790,3 +790,59 @@ def test_acquire_inflight_lock_returns_409(client):
     finally:
         with srv._acquire_lock:
             srv._acquire_inflight.discard(url)
+
+
+# ── /library/suffixes route ───────────────────────────────────────────────────
+
+def test_get_suffixes_returns_list(client, tmp_path):
+    """GET /library/suffixes reads title_suffixes.txt lines."""
+    import json as _json
+    suffix_file = tmp_path / "title_suffixes.txt"
+    suffix_file.write_text("(Official Video)\n(Lyrics)\n\n  \n")
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._PROJECT_ROOT", str(tmp_path)):
+        resp = client.get("/library/suffixes")
+    assert resp.status_code == 200
+    data = _json.loads(resp.data)
+    assert data["suffixes"] == ["(Official Video)", "(Lyrics)"]
+
+
+def test_get_suffixes_missing_file_returns_empty(client, tmp_path):
+    """GET /library/suffixes when file missing → empty list."""
+    import json as _json
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._PROJECT_ROOT", str(tmp_path)):
+        resp = client.get("/library/suffixes")
+    assert resp.status_code == 200
+    data = _json.loads(resp.data)
+    assert data["suffixes"] == []
+
+
+def test_post_suffixes_writes_and_roundtrips(client, tmp_path):
+    """POST /library/suffixes writes atomically and round-trips."""
+    import json as _json
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._PROJECT_ROOT", str(tmp_path)):
+        resp = client.post("/library/suffixes", json={"suffixes": ["(Official)", "(Live)"]})
+        assert resp.status_code == 200
+        # Round-trip via GET
+        resp2 = client.get("/library/suffixes")
+    data = _json.loads(resp2.data)
+    assert data["suffixes"] == ["(Official)", "(Live)"]
+
+
+def test_post_suffixes_non_list_returns_400(client, tmp_path):
+    """POST /library/suffixes with non-list body → 400."""
+    import json as _json
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._PROJECT_ROOT", str(tmp_path)):
+        resp = client.post("/library/suffixes", json={"suffixes": "not-a-list"})
+    assert resp.status_code == 400
