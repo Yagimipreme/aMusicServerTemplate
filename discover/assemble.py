@@ -2,6 +2,23 @@ import os
 import re
 
 
+def read_playlist_basenames(song_dir: str, name: str) -> list:
+    """Read existing basenames from a playlist m3u file (oldest first).
+
+    Returns an empty list if the file doesn't exist or can't be read.
+    """
+    safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+    m3u_path = os.path.join(song_dir, safe + ".m3u")
+    existing = []
+    if os.path.exists(m3u_path):
+        with open(m3u_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    existing.append(line)
+    return existing
+
+
 def write_weekly_mix(song_dir: str, mp3_paths, name: str = "Weekly Mix",
                      cap: int = 100) -> str:
     """Append new tracks to the playlist and rotate out oldest when over cap.
@@ -15,13 +32,7 @@ def write_weekly_mix(song_dir: str, mp3_paths, name: str = "Weekly Mix",
     m3u_path = os.path.join(song_dir, safe + ".m3u")
 
     # Read existing track list (preserves insertion order — oldest first)
-    existing = []
-    if os.path.exists(m3u_path):
-        with open(m3u_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    existing.append(line)
+    existing = read_playlist_basenames(song_dir, name)
 
     # Append new tracks, skipping duplicates already in the list
     existing_set = set(existing)

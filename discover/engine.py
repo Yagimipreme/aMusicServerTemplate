@@ -3,12 +3,12 @@ import logging
 import os
 import datetime
 
-from discover.seeds import collect_seeds
+from discover.seeds import collect_seeds, genre_seed_artists
 from discover.expand import expand_similar, enrich_artist_info
 from discover.resolve import resolve_tracks
 from discover.dedupe import filter_fresh, track_key
 from discover.acquire import acquire
-from discover.assemble import write_weekly_mix
+from discover.assemble import write_weekly_mix, read_playlist_basenames
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,185 @@ def run_mix(deps, cfg):
                 logger.exception("discover: scan trigger failed")
         deps.state.save(stamp_last_run=True)
         return {"acquired": len(acquired_paths), "m3u": m3u}
+
+
+def _existing_playlist_basenames(song_dir: str, name: str) -> set:
+    """Return set of basenames already in the named playlist's m3u."""
+    return set(read_playlist_basenames(song_dir, name))
+
+
+def run_profile(deps, cfg, profile):
+    """Run one mix profile: blend of newly-acquired + owned tracks. Spec §Engine."""
+    disc = cfg.get("discover") or {}
+    quality = {**disc, **(profile.get("quality") or {})}
+    count = max(1, int(profile["count"]))
+    cap = max(count, int(profile["cap"]))
+    new_ratio = float(profile.get("new_ratio", 1.0))
+    new_count = round(count * new_ratio)
+    lib_count = count - new_count
+    seeds_cfg = profile.get("seeds") or {}
+    mode = seeds_cfg.get("mode", "history")
+    lastfm_client = getattr(deps, "lastfm_client", None)
+    lastfm_username = cfg.get("lastfm_username", "")
+
+    acquired_paths = []
+    if new_count > 0:
+        seeds = []
+        if mode == "history":
+            if not lastfm_client or not lastfm_is_ready(lastfm_client, lastfm_username, cfg):
+                if lib_count == 0:
+                    return {"profile": profile["id"], "status": "skipped",
+                            "reason": "lastfm not ready"}
+                new_count, lib_count = 0, count
+            else:
+                seeds = collect_seeds(deps.subsonic, limit=int(quality.get("seed_artist_count", 20)),
+                                      lastfm_client=lastfm_client, lastfm_username=lastfm_username,
+                                      lastfm_period=quality.get("lastfm_period", "1month"),
+                                      lastfm_periods=quality.get("lastfm_periods") or None,
+                                      seed_playlist=seeds_cfg.get("playlist", ""))
+        elif mode == "genre":
+            seeds = genre_seed_artists(lastfm_client, seeds_cfg.get("genres") or []) if lastfm_client else []
+        elif mode == "manual":
+            seeds = [{"id": "-1", "name": a} for a in seeds_cfg.get("artists") or []]
+        elif mode == "playlist":
+            seeds = collect_seeds(deps.subsonic, limit=int(quality.get("seed_artist_count", 20)),
+                                  lastfm_client=lastfm_client, lastfm_username=lastfm_username,
+                                  seed_playlist=seeds_cfg.get("playlist", ""))
+        if new_count > 0 and seeds:
+            artists = expand_similar(deps.subsonic, seeds, per_seed=20, lastfm_client=lastfm_client)
+            if lastfm_client is not None:
+                artists = sorted(artists, key=lambda a: -a.get("score", 0))[:60]
+                artists = enrich_artist_info(lastfm_client, artists,
+                                             min_listeners=int(quality.get("min_artist_listeners", 5000)))
+            candidates = resolve_tracks(deps.search_fn, artists, per_artist=1)
+            fresh = filter_fresh(deps.subsonic.song_exists, deps.state, candidates)
+            for c in fresh:
+                if len(acquired_paths) >= new_count:
+                    break
+                paths = acquire(deps.download_fn, c)
+                if not paths:
+                    continue
+                acquired_paths.extend(paths[: new_count - len(acquired_paths)])
+                deps.state.add(track_key(c["artist"], c["title"]))
+
+    # library share + backfill of any new-share shortfall
+    lib_paths = []
+    lib_needed = count - len(acquired_paths) if lib_count > 0 or len(acquired_paths) < new_count else 0
+    lib_needed = min(lib_needed, count - len(acquired_paths))
+    if lib_needed > 0:
+        existing = _existing_playlist_basenames(deps.song_dir, profile["name"])
+        from discover.library_pick import select_library_tracks
+        picks = select_library_tracks(deps.subsonic, profile, existing, lib_needed)
+        lib_paths = [s["path"] for s in picks]
+
+    m3u = None
+    if acquired_paths or lib_paths:
+        m3u = write_weekly_mix(deps.song_dir, acquired_paths + lib_paths,
+                               name=profile["name"], cap=cap)
+        try:
+            deps.subsonic.start_scan()
+        except Exception:
+            logger.exception("discover: scan trigger failed")
+    deps.state.save(stamp_last_run=False)
+    return {"profile": profile["id"], "acquired": len(acquired_paths),
+            "library_added": len(lib_paths), "m3u": m3u}
+
+
+def run_daily(deps, cfg):
+    """Run the Daily Mix pipeline: a small daily discovery drop.
+
+    Delegates to run_profile() using the daily profile built from config.
+    Returns {"status": "skipped", "reason": ...} if Last.fm is not ready.
+    Returns {"acquired": int, "m3u": str|None} on success.
+    Calls state.save(stamp_last_run=False) so the weekly last_run is not clobbered.
+    """
+    disc = cfg.get("discover") or {}
+    daily = disc.get("daily") or {}
+    count = max(1, int(daily.get("count", 7)))
+    window_days = max(1, int(daily.get("window_days", 7)))
+    playlist_name = daily.get("playlist_name", "Daily Mix")
+    cap = count * window_days
+
+    profile = {
+        "id": "daily",
+        "name": playlist_name,
+        "enabled": bool(daily.get("enabled", True)),
+        "auto_generated": False,
+        "schedule": {"cadence": "daily", "run_day": "",
+                     "run_hour": int(daily.get("run_hour", 7))},
+        "count": count,
+        "cap": cap,
+        "new_ratio": 1.0,
+        "seeds": {"mode": "history", "genres": [], "artists": [], "playlist": ""},
+        "quality": {},
+    }
+    result = run_profile(deps, cfg, profile)
+    # Normalise: run_profile returns {"profile": ..., "acquired": ..., "m3u": ...}
+    # run_daily callers expect {"acquired": ..., "m3u": ...} or {"status": "skipped", ...}
+    if result.get("status") == "skipped":
+        return result
+    return {"acquired": result.get("acquired", 0), "m3u": result.get("m3u"),
+            "library_added": result.get("library_added", 0)}
+
+
+def run_daily_from_config(project_root: str):
+    """Build a Deps object from config.json at project_root and call run_daily().
+    Used by CLI / manual trigger."""
+    import sys
+    import importlib.util
+    sys.path.insert(0, project_root)
+    from discover.config import load_config
+    from discover.subsonic import Subsonic
+    from discover.state import DiscoverState
+    from discover.ytdlp_adapter import make_search_fn, make_download_fn
+    cfg = load_config(os.path.join(project_root, "config.json"))
+    disc = cfg.get("discover") or {}
+    if not disc.get("enabled", True):
+        return {"acquired": 0, "m3u": None, "reason": "discover disabled"}
+    daily = disc.get("daily") or {}
+    if not daily.get("enabled", False):
+        return {"acquired": 0, "m3u": None, "reason": "daily disabled"}
+    host = cfg.get("navidrome_url", "")
+    user = cfg.get("navidrome_user", "")
+    pw = cfg.get("navidrome_pass", "")
+    if not host:
+        return {"acquired": 0, "m3u": None, "reason": "navidrome_url not set"}
+    subsonic = Subsonic(host, user, pw)
+
+    dl_path = os.path.join(project_root, "scripts/sTownload/script_web.py")
+    spec = importlib.util.spec_from_file_location("sTownload_web", dl_path)
+    dl_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl_mod)
+    song_dir = dl_mod.get_config_song_dir()
+
+    state_path = os.path.join(project_root, "discover_state.json")
+    from discover.state import load_state
+    ttl_days = int((cfg.get("discover") or {}).get("suggested_ttl_days", 90))
+    state = load_state(state_path, ttl_days=ttl_days)
+
+    lastfm_client = None
+    lfm_key = cfg.get("lastfm_api_key", "")
+    if lfm_key:
+        try:
+            from lastfm.client import LastFMClient
+            lastfm_client = LastFMClient(lfm_key)
+        except Exception:
+            pass
+
+    _oversample = int(disc.get("yt_oversample", 5))
+    _extra_junk = frozenset(disc.get("junk_keywords", []))
+
+    from types import SimpleNamespace
+    deps = SimpleNamespace(
+        subsonic=subsonic,
+        state=state,
+        song_dir=song_dir,
+        search_fn=make_search_fn(oversample=_oversample, extra_junk_keywords=_extra_junk),
+        download_fn=make_download_fn(lambda url: dl_mod.download_url(url, song_dir)),
+        lastfm_client=lastfm_client,
+    )
+
+    return run_daily(deps, cfg)
 
 
 def run_mix_from_config(project_root: str):
