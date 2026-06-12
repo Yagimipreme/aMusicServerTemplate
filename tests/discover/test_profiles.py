@@ -1,6 +1,7 @@
 """Tests for discover/profiles.py — schema validation and legacy migration."""
+from types import SimpleNamespace
 import pytest
-from discover.profiles import validate_profile, migrate_config
+from discover.profiles import validate_profile, migrate_config, suggest_genre_profiles
 
 
 # ── validate_profile happy path ───────────────────────────────────────────────
@@ -264,3 +265,98 @@ def test_migrate_config_idempotent_no_duplicates():
     cfg2["mixes"] = mixes1
     mixes2 = migrate_config(cfg2)
     assert len(mixes2) == 2  # no duplicates
+
+
+# ── suggest_genre_profiles ────────────────────────────────────────────────────
+
+def make_subsonic_with_genres(genres):
+    """genres: list of (name, songCount) tuples."""
+    def get_genres():
+        return [{"name": n, "songCount": c} for n, c in genres]
+    return SimpleNamespace(get_genres=get_genres)
+
+
+def test_suggest_genre_profiles_top_n_by_song_count():
+    subsonic = make_subsonic_with_genres([
+        ("Techno", 100), ("Ambient", 80), ("Jazz", 50), ("Classical", 30), ("Pop", 10),
+    ])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=[], top_n=3)
+    assert len(profiles) == 3
+    names = [p["seeds"]["genres"][0] for p in profiles]
+    # Top 3 by songCount: techno, ambient, jazz
+    assert "techno" in names
+    assert "ambient" in names
+    assert "jazz" in names
+    assert "pop" not in names
+
+
+def test_suggest_genre_profiles_skips_covered_genres():
+    """Genres already in existing profiles are skipped."""
+    existing = [{
+        "id": "weekly", "name": "Weekly Mix",
+        "seeds": {"mode": "genre", "genres": ["techno"], "artists": [], "playlist": ""}
+    }]
+    subsonic = make_subsonic_with_genres([("Techno", 100), ("Ambient", 50)])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=existing, top_n=4)
+    tags = [p["seeds"]["genres"][0] for p in profiles]
+    assert "techno" not in tags
+    assert "ambient" in tags
+
+
+def test_suggest_genre_profiles_staggered_run_days():
+    subsonic = make_subsonic_with_genres(
+        [(f"Genre{i}", 100 - i) for i in range(8)]
+    )
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=[], top_n=4)
+    days = [p["schedule"]["run_day"] for p in profiles]
+    assert days[0] == "monday"
+    assert days[1] == "tuesday"
+    assert days[2] == "wednesday"
+    assert days[3] == "thursday"
+
+
+def test_suggest_genre_profiles_defaults():
+    subsonic = make_subsonic_with_genres([("Techno", 50)])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=[], top_n=4)
+    assert len(profiles) == 1
+    p = profiles[0]
+    assert p["schedule"]["run_hour"] == 7
+    assert p["count"] == 15
+    assert p["cap"] == 60
+    assert p["new_ratio"] == 0.3
+    assert p["auto_generated"] is True
+    assert p["enabled"] is True
+
+
+def test_suggest_genre_profiles_id_slug():
+    subsonic = make_subsonic_with_genres([("Drum And Bass", 50)])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=[], top_n=1)
+    assert profiles[0]["id"] == "genre-drum-and-bass"
+
+
+def test_suggest_genre_profiles_skips_empty_names():
+    subsonic = make_subsonic_with_genres([("", 100), ("Techno", 50)])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=[], top_n=4)
+    tags = [p["seeds"]["genres"][0] for p in profiles]
+    assert "" not in tags
+
+
+def test_suggest_genre_profiles_no_collision_with_existing_ids():
+    existing = [{"id": "genre-techno", "name": "Techno Mix",
+                 "seeds": {"genres": [], "mode": "genre"}}]
+    subsonic = make_subsonic_with_genres([("Techno", 100), ("Ambient", 50)])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=existing, top_n=4)
+    ids = [p["id"] for p in profiles]
+    assert "genre-techno" not in ids
+
+
+def test_suggest_genre_profiles_case_insensitive_covered_check():
+    """Case-insensitive check against existing seeds.genres."""
+    existing = [{
+        "id": "my-techno", "name": "My Techno",
+        "seeds": {"mode": "genre", "genres": ["TECHNO"], "artists": [], "playlist": ""}
+    }]
+    subsonic = make_subsonic_with_genres([("Techno", 100), ("Ambient", 50)])
+    profiles = suggest_genre_profiles(subsonic, existing_mixes=existing, top_n=4)
+    tags = [p["seeds"]["genres"][0] for p in profiles]
+    assert "techno" not in tags
