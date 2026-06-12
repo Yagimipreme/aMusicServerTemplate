@@ -159,7 +159,8 @@ def test_post_settings_type_mismatch_returns_400(client, tmp_path):
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(_json.dumps(cfg))
     with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
-        resp = client.post("/settings", json={"discover.daily.count": "not-an-int"})
+        # discover.weekly_count is an int field still in schema
+        resp = client.post("/settings", json={"discover.weekly_count": "not-an-int"})
     assert resp.status_code == 400
     data = _json.loads(resp.data)
     assert "fields" in data
@@ -181,16 +182,17 @@ def test_post_settings_empty_secret_is_ignored(client, tmp_path):
 
 def test_post_settings_valid_nested_path_deep_merges(client, tmp_path):
     import json as _json
-    cfg = {"discover": {"schedule": "weekly", "daily": {"count": 5}}}
+    cfg = {"discover": {"schedule": "weekly", "weekly_count": 5}}
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(_json.dumps(cfg))
     with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
-        resp = client.post("/settings", json={"discover.daily.count": 10})
+        # discover.weekly_count is an int field still in schema (daily.* superseded by mixes UI)
+        resp = client.post("/settings", json={"discover.weekly_count": 10})
     assert resp.status_code == 200
     saved = _json.loads(cfg_file.read_text())
     # Deep merge: discover.schedule must still be there
     assert saved["discover"]["schedule"] == "weekly"
-    assert saved["discover"]["daily"]["count"] == 10
+    assert saved["discover"]["weekly_count"] == 10
 
 
 def test_post_settings_atomic_write_leaves_valid_json(client, tmp_path):

@@ -767,11 +767,7 @@ SETTINGS_SCHEMA = [
     {"path": "discover.suggested_ttl_days",  "type": "int",       "label": "Suggestion memory (days)", "group": "Discovery", "min": 1, "max": 365},
     {"path": "discover.min_artist_listeners","type": "int",       "label": "Min artist listeners",      "group": "Discovery", "min": 0, "max": 10000000},
     {"path": "discover.candidate_oversample","type": "int",       "label": "Candidate oversample",      "group": "Discovery", "min": 1, "max": 20},
-    {"path": "discover.daily.enabled",       "type": "bool",      "label": "Daily mix enabled",         "group": "Discovery"},
-    {"path": "discover.daily.count",         "type": "int",       "label": "Daily mix size",            "group": "Discovery", "min": 1, "max": 50},
-    {"path": "discover.daily.run_hour",      "type": "int",       "label": "Daily run hour (0–23)",     "group": "Discovery", "min": 0, "max": 23},
-    {"path": "discover.daily.window_days",   "type": "int",       "label": "Daily window (days)",       "group": "Discovery", "min": 1, "max": 30},
-    {"path": "discover.daily.playlist_name", "type": "str",       "label": "Daily playlist name",       "group": "Discovery"},
+    # Note: discover.daily.* removed — superseded by Mixes UI (mix profiles).
     # Sources group
     {"path": "sc_username",                  "type": "str",       "label": "SoundCloud username URL",   "group": "Sources"},
     {"path": "sp_playlist_ids",              "type": "list[str]", "label": "Spotify playlist IDs",      "group": "Sources"},
