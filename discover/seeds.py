@@ -4,6 +4,26 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def genre_seed_artists(lastfm_client, genres: list, limit_per_genre: int = 30) -> list:
+    """Top Last.fm artists for each tag, merged + deduped: [{'id': '-1', 'name': str}]."""
+    seen, out = set(), []
+    for tag in genres or []:
+        try:
+            resp = lastfm_client.call("tag.gettopartists", tag=tag, limit=limit_per_genre)
+        except Exception:
+            logger.warning("seeds: tag.gettopartists failed for %r", tag, exc_info=True)
+            continue
+        artists = (resp.get("topartists") or {}).get("artist") or []
+        if isinstance(artists, dict):
+            artists = [artists]
+        for a in artists:
+            name = (a.get("name") or "").strip()
+            if name and name.lower() not in seen:
+                seen.add(name.lower())
+                out.append({"id": "-1", "name": name})
+    return out
+
+
 def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
                   lastfm_username: str = "", lastfm_period: str = "1month",
                   lastfm_periods=None, seed_playlist: str = ""):
