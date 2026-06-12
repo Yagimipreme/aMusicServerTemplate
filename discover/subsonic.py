@@ -33,18 +33,22 @@ class Subsonic:
         return data.get("subsonic-response", {}) or {}
 
     def get_frequent_artists(self, size: int = 50):
-        """Most-played albums -> ordered, de-duplicated artist list."""
+        """Most-played albums -> ordered, de-duplicated artist list with summed play counts."""
         sr = self._call("getAlbumList2.view", type="frequent", size=size)
         albums = (sr.get("albumList2", {}) or {}).get("album", []) or []
-        out, seen = [], set()
+        counts: dict = {}   # aid -> {"id", "name", "play_count"}
+        order: list = []    # first-seen insertion order
         for alb in albums:
             aid = alb.get("artistId")
             name = alb.get("artist")
-            if not name or aid in seen:
+            if not name or not aid:
                 continue
-            seen.add(aid)
-            out.append({"id": aid, "name": name})
-        return out
+            pc = int(alb.get("playCount") or 0)
+            if aid not in counts:
+                counts[aid] = {"id": aid, "name": name, "play_count": 0}
+                order.append(aid)
+            counts[aid]["play_count"] += pc
+        return [counts[aid] for aid in order]
 
     def find_artist_id(self, name: str) -> str | None:
         """Search Navidrome for an artist by name and return their ID, or None."""

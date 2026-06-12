@@ -20,8 +20,8 @@ def test_get_frequent_artists_dedupes_and_keeps_order():
     c = make_client({"getAlbumList2": payload})
     artists = c.get_frequent_artists(size=50)
     assert artists == [
-        {"id": "a1", "name": "Boards of Canada"},
-        {"id": "a2", "name": "Aphex Twin"},
+        {"id": "a1", "name": "Boards of Canada", "play_count": 0},
+        {"id": "a2", "name": "Aphex Twin", "play_count": 0},
     ]
 
 
@@ -54,3 +54,32 @@ def test_start_scan_returns_true_on_ok():
     payload = {"subsonic-response": {"status": "ok"}}
     c = make_client({"startScan": payload})
     assert c.start_scan() is True
+
+
+def test_get_frequent_artists_accumulates_play_counts():
+    """Albums from the same artist should have their play counts summed."""
+    fake_response = {
+        "subsonic-response": {
+            "albumList2": {
+                "album": [
+                    {"artistId": "1", "artist": "Burial", "playCount": 30},
+                    {"artistId": "1", "artist": "Burial", "playCount": 20},
+                    {"artistId": "2", "artist": "Actress", "playCount": 10},
+                ]
+            }
+        }
+    }
+
+    def fake_fetch(url):
+        return fake_response
+
+    from discover.subsonic import Subsonic
+    sub = Subsonic("http://localhost", "u", "p", fetch_json=fake_fetch)
+    artists = sub.get_frequent_artists(size=50)
+
+    burial = next(a for a in artists if a["name"] == "Burial")
+    actress = next(a for a in artists if a["name"] == "Actress")
+
+    assert burial["play_count"] == 50
+    assert actress["play_count"] == 10
+    assert artists[0]["name"] == "Burial"  # first-seen order preserved
