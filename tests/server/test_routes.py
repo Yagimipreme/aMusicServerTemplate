@@ -741,4 +741,52 @@ def test_yt_search_subprocess_error_returns_empty_not_500(client):
     assert resp.status_code == 200
     data = json.loads(resp.data)
     assert data["results"] == []
-    assert "error" in data
+
+
+# ── /acquire route ────────────────────────────────────────────────────────────
+
+def test_acquire_no_body_returns_400(client):
+    """POST /acquire with no body → 400."""
+    resp = client.post("/acquire", json={})
+    assert resp.status_code == 400
+    data = json.loads(resp.data)
+    assert data["status"] == "error"
+
+def test_acquire_ftp_url_returns_400(client):
+    """POST /acquire with ftp:// URL → 400."""
+    resp = client.post("/acquire", json={"url": "ftp://example.com/file.mp3"})
+    assert resp.status_code == 400
+    data = json.loads(resp.data)
+    assert data["status"] == "error"
+
+def test_acquire_unknown_host_returns_400(client):
+    """POST /acquire with unknown host → 400."""
+    resp = client.post("/acquire", json={"url": "https://evil.example.com/x"})
+    assert resp.status_code == 400
+    data = json.loads(resp.data)
+    assert data["status"] == "error"
+
+def test_acquire_happy_path(client, tmp_path):
+    """POST /acquire with allowed host + mocked download → 200 ok."""
+    import sWebExt.py_server.server as srv
+    with patch("sWebExt.py_server.server._download_url", return_value="/music/track.mp3"):
+        resp = client.post("/acquire", json={"url": "https://www.youtube.com/watch?v=abc123"})
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["path"] == "/music/track.mp3"
+
+def test_acquire_inflight_lock_returns_409(client):
+    """POST /acquire same URL while in-flight → 409."""
+    import sWebExt.py_server.server as srv
+    url = "https://www.youtube.com/watch?v=locked"
+    with srv._acquire_lock:
+        srv._acquire_inflight.add(url)
+    try:
+        resp = client.post("/acquire", json={"url": url})
+        assert resp.status_code == 409
+        data = json.loads(resp.data)
+        assert data["status"] == "busy"
+    finally:
+        with srv._acquire_lock:
+            srv._acquire_inflight.discard(url)

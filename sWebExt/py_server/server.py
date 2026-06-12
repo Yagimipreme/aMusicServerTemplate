@@ -80,6 +80,12 @@ _discover_running = threading.Lock()
 
 _dedup_running = threading.Lock()
 
+# ── Acquire state ─────────────────────────────────────────────────────────────
+
+_acquire_inflight, _acquire_lock = set(), threading.Lock()
+_ACQUIRE_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be", "music.youtube.com",
+                  "soundcloud.com", "on.soundcloud.com", "m.soundcloud.com"}
+
 # ── Config read-modify-write lock ─────────────────────────────────────────────
 # RLock so nested callers (e.g. _load_mixes inside mixes_post) can re-enter.
 
@@ -709,6 +715,25 @@ def _get_hostname() -> str:
     return _get_config().get("hostname", "amusicserver.local")
 
 
+def _download_url(url: str) -> "str | None":
+    """Download url using the sTownload script_web.py download_url function.
+    Returns the first mp3 path downloaded, or None on failure.
+    """
+    try:
+        cfg = _get_config()
+        song_dir = cfg.get("song_dir") or str(os.path.join(os.path.expanduser("~"), "Music"))
+        os.makedirs(song_dir, exist_ok=True)
+        dl_path = os.path.join(_PROJECT_ROOT, "scripts/sTownload/script_web.py")
+        spec = importlib.util.spec_from_file_location("sTownload_web_acquire", dl_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _, paths = mod.download_url(url, song_dir)
+        return paths[0] if paths else None
+    except Exception:
+        logger.warning("[ACQUIRE] _download_url failed", exc_info=True)
+        return None
+
+
 # ── Existing routes (migrated) ────────────────────────────────────────────────
 
 @app.route("/", methods=["GET"])
@@ -1199,6 +1224,30 @@ def yt_search():
     except Exception as e:
         logger.warning("yt_search failed", exc_info=True)
         return jsonify({"results": [], "error": str(e)})
+
+
+# ── Acquire route ────────────────────────────────────────────────────────────
+
+@app.route("/acquire", methods=["POST"])
+def acquire_url():
+    body = request.get_json(force=True, silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url:
+        return jsonify({"status": "error", "error": "url required"}), 400
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or p.hostname not in _ACQUIRE_HOSTS:
+        return jsonify({"status": "error", "error": "unsupported url"}), 400
+    with _acquire_lock:
+        if url in _acquire_inflight:
+            return jsonify({"status": "busy", "reason": "already downloading"}), 409
+        _acquire_inflight.add(url)
+    try:
+        path = _download_url(url)
+        return jsonify({"status": "ok" if path else "error", "path": path})
+    finally:
+        with _acquire_lock:
+            _acquire_inflight.discard(url)
 
 
 # ── Explore UI ────────────────────────────────────────────────────────────────
