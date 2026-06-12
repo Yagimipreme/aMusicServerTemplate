@@ -9,6 +9,7 @@ import re
 import sys
 import threading
 import time
+import datetime
 import importlib.util
 import runpy
 import shutil
@@ -69,6 +70,10 @@ _enrich_last_result: dict = {"status": "idle"}
 
 _repair_running = threading.Lock()
 _repair_last_result: dict = {"status": "idle"}
+
+# ── Discover run state ────────────────────────────────────────────────────────
+
+_discover_running = threading.Lock()
 
 # ── Dedup state ───────────────────────────────────────────────────────────────
 
@@ -142,6 +147,26 @@ def _run_discover_once():
         return {"status": "error", "error": str(e)}
 
 
+def _run_discover_daily_once():
+    try:
+        deps = _build_discover_deps()
+        if deps is None:
+            return {"status": "disabled", "reason": "navidrome creds missing"}
+        from discover.engine import run_daily
+        cfg = {}
+        try:
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+        result = run_daily(deps, cfg)
+        logger.info("[DISCOVER-DAILY] run complete: %s", result)
+        return {"status": "ok", **result}
+    except Exception as e:
+        logger.exception("[DISCOVER-DAILY] run failed")
+        return {"status": "error", "error": str(e)}
+
+
 def _seconds_until_next_run(schedule: str, run_day: str, run_hour: int) -> float:
     import datetime as _dt
     now = _dt.datetime.now()
@@ -162,8 +187,99 @@ def _seconds_until_next_run(schedule: str, run_day: str, run_hour: int) -> float
         return (candidate - now).total_seconds()
 
 
-def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
-    # Initial run: if discover_state.json has no last_run and Navidrome has songs, run immediately
+def _profile_next_run(profile: dict, now: datetime.datetime) -> datetime.datetime:
+    """Compute the next scheduled run datetime for a profile.
+
+    daily: today at run_hour (or tomorrow if already past).
+    weekly: next run_day at run_hour (or next week if same day past hour).
+    run_hour is clamped to [0, 23].
+    """
+    sched = profile.get("schedule") or {}
+    cadence = sched.get("cadence", "daily")
+    run_hour = max(0, min(23, int(sched.get("run_hour", 0))))
+
+    if cadence == "daily":
+        candidate = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += datetime.timedelta(days=1)
+        return candidate
+    else:  # weekly
+        day_map = {
+            "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+            "friday": 4, "saturday": 5, "sunday": 6,
+        }
+        run_day = str(sched.get("run_day", "sunday")).lower()
+        target_wd = day_map.get(run_day, 6)
+        days_ahead = (target_wd - now.weekday()) % 7
+        candidate = (now + datetime.timedelta(days=days_ahead)).replace(
+            hour=run_hour, minute=0, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += datetime.timedelta(weeks=1)
+        return candidate
+
+
+def _atomic_write_config(cfg: dict) -> None:
+    """Write config atomically using .tmp + os.replace."""
+    tmp_path = _CONFIG_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, _CONFIG_PATH)
+
+
+def _load_mixes() -> list:
+    """Load and migrate mixes list from config, persisting migration on first load."""
+    cfg = _get_config()
+    from discover.profiles import migrate_config
+    mixes = migrate_config(cfg)
+    if "mixes" not in cfg:                       # persist migration once
+        cfg["mixes"] = mixes
+        _atomic_write_config(cfg)
+    return mixes
+
+
+def _persist_next_runs(next_runs: dict) -> None:
+    """Persist next_runs dict into discover_state.json, preserving other keys."""
+    state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
+    state = {}
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        pass
+    state["next_runs"] = next_runs
+    tmp = state_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, state_path)
+    except Exception:
+        logger.warning("[MIXES] Could not persist next_runs", exc_info=True)
+
+
+_mix_wake = threading.Event()
+
+
+def _run_profile_once(profile) -> dict:
+    if not _discover_running.acquire(blocking=False):
+        return {"status": "busy", "reason": "another discover run in progress"}
+    try:
+        deps = _build_discover_deps()
+        if deps is None:
+            return {"status": "disabled", "reason": "navidrome creds missing"}
+        from discover.engine import run_profile
+        result = run_profile(deps, _get_config(), profile)
+        logger.info("[MIXES] %s run complete: %s", profile["id"], result)
+        return result
+    except Exception as e:
+        logger.exception("[MIXES] %s run failed", profile.get("id"))
+        return {"status": "error", "error": str(e)}
+    finally:
+        _discover_running.release()
+
+
+def _mix_scheduler_loop():
+    """Unified profile scheduler loop — replaces _discover_weekly_loop + _discover_daily_loop."""
+    # Initial run: if discover_state.json has no last_run and library has songs, run weekly
     state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
     try:
         with open(state_path, encoding="utf-8") as f:
@@ -183,25 +299,33 @@ def _discover_weekly_loop(period_seconds=7 * 24 * 3600):
                 sub_i = _Sub(host_i, user_i, pw_i)
                 artists_i = sub_i.get_frequent_artists(size=1)
                 if artists_i:
-                    logger.info("[DISCOVER] No last_run found and library has songs — running initial mix")
-                    _run_discover_once()
+                    logger.info("[MIXES] No last_run found and library has songs — running initial weekly mix")
+                    mixes_init = _load_mixes()
+                    weekly = next((m for m in mixes_init if m.get("id") == "weekly" and m.get("enabled")), None)
+                    if weekly:
+                        _run_profile_once(weekly)
         except Exception:
-            logger.warning("[DISCOVER] initial-run check failed", exc_info=True)
+            logger.warning("[MIXES] initial-run check failed", exc_info=True)
 
     while True:
         try:
-            cfg = _get_config()
-            disc = cfg.get("discover") or {}
-            schedule = disc.get("schedule", "weekly")
-            run_day = disc.get("run_day", "sunday")
-            run_hour = disc.get("run_hour", 22)
-            sleep_secs = _seconds_until_next_run(schedule, run_day, run_hour)
-            logger.info("[DISCOVER] next run in %.0f seconds (%s %s @%d:00)", sleep_secs, schedule, run_day, run_hour)
-            time.sleep(sleep_secs)
-            logger.info("[DISCOVER] scheduled cycle starting")
-            _run_discover_once()
+            mixes = [m for m in _load_mixes() if m.get("enabled")]
+            now = datetime.datetime.now()
+            next_runs = {m["id"]: _profile_next_run(m, now) for m in mixes}
+            _persist_next_runs({k: v.isoformat() for k, v in next_runs.items()})
+            if not next_runs:
+                _mix_wake.wait(3600)
+                _mix_wake.clear()
+                continue
+            soonest = min(next_runs.values())
+            _mix_wake.wait(max(1.0, (soonest - now).total_seconds()))
+            _mix_wake.clear()
+            now = datetime.datetime.now()
+            for m in [m for m in _load_mixes() if m.get("enabled")]:
+                if _profile_next_run(m, now - datetime.timedelta(minutes=1)) <= now:
+                    _run_profile_once(m)         # sequential; failures logged inside
         except Exception:
-            logger.exception("[DISCOVER] loop iteration failed; retrying in 3600s")
+            logger.exception("[MIXES] scheduler iteration failed; retrying in 3600s")
             time.sleep(3600)
 
 
@@ -633,6 +757,44 @@ _DISCOVER_CONFIG_KEYS = {
     "seed_playlist",
 }
 
+SETTINGS_SCHEMA = [
+    # Discovery group
+    {"path": "discover.schedule",            "type": "str",       "label": "Weekly schedule",          "group": "Discovery"},
+    {"path": "discover.run_day",             "type": "str",       "label": "Run day (weekly)",          "group": "Discovery"},
+    {"path": "discover.run_hour",            "type": "int",       "label": "Run hour (0–23)",           "group": "Discovery", "min": 0, "max": 23},
+    {"path": "discover.weekly_count",        "type": "int",       "label": "Weekly mix size",           "group": "Discovery", "min": 1, "max": 200},
+    {"path": "discover.playlist_cap",        "type": "int",       "label": "Playlist size cap",         "group": "Discovery", "min": 1, "max": 1000},
+    {"path": "discover.suggested_ttl_days",  "type": "int",       "label": "Suggestion memory (days)", "group": "Discovery", "min": 1, "max": 365},
+    {"path": "discover.min_artist_listeners","type": "int",       "label": "Min artist listeners",      "group": "Discovery", "min": 0, "max": 10000000},
+    {"path": "discover.candidate_oversample","type": "int",       "label": "Candidate oversample",      "group": "Discovery", "min": 1, "max": 20},
+    {"path": "discover.daily.enabled",       "type": "bool",      "label": "Daily mix enabled",         "group": "Discovery"},
+    {"path": "discover.daily.count",         "type": "int",       "label": "Daily mix size",            "group": "Discovery", "min": 1, "max": 50},
+    {"path": "discover.daily.run_hour",      "type": "int",       "label": "Daily run hour (0–23)",     "group": "Discovery", "min": 0, "max": 23},
+    {"path": "discover.daily.window_days",   "type": "int",       "label": "Daily window (days)",       "group": "Discovery", "min": 1, "max": 30},
+    {"path": "discover.daily.playlist_name", "type": "str",       "label": "Daily playlist name",       "group": "Discovery"},
+    # Sources group
+    {"path": "sc_username",                  "type": "str",       "label": "SoundCloud username URL",   "group": "Sources"},
+    {"path": "sp_playlist_ids",              "type": "list[str]", "label": "Spotify playlist IDs",      "group": "Sources"},
+    {"path": "sc_topsong",                   "type": "str",       "label": "SoundCloud top song URL",   "group": "Sources"},
+    {"path": "spotify_playlists_dir",        "type": "str",       "label": "Spotify playlists dir",     "group": "Sources"},
+    # Maintenance group
+    {"path": "dedup.enabled",                "type": "bool",      "label": "Dedup enabled",             "group": "Maintenance"},
+    {"path": "dedup.interval_hours",         "type": "int",       "label": "Dedup interval (hours)",    "group": "Maintenance", "min": 1, "max": 168},
+    {"path": "dedup.auto_delete",            "type": "bool",      "label": "Dedup auto-delete",         "group": "Maintenance"},
+    {"path": "title_cleanup.enabled",        "type": "bool",      "label": "Title cleanup enabled",     "group": "Maintenance"},
+    # Server group
+    {"path": "hostname",                     "type": "str",       "label": "Server hostname",           "group": "Server"},
+    {"path": "song_dir",                     "type": "str",       "label": "Song directory",            "group": "Server"},
+    {"path": "path",                         "type": "str",       "label": "Library path",              "group": "Server"},
+    # Credentials group
+    {"path": "navidrome_url",                "type": "str",       "label": "Navidrome URL",             "group": "Credentials"},
+    {"path": "navidrome_user",               "type": "str",       "label": "Navidrome user",            "group": "Credentials"},
+    {"path": "navidrome_pass",               "type": "secret",    "label": "Navidrome password",        "group": "Credentials"},
+    {"path": "lastfm_api_key",               "type": "secret",    "label": "Last.fm API key",           "group": "Credentials"},
+    {"path": "lastfm_api_secret",            "type": "secret",    "label": "Last.fm API secret",        "group": "Credentials"},
+    {"path": "lastfm_username",              "type": "str",       "label": "Last.fm username",          "group": "Credentials"},
+]
+
 
 @app.route("/discover/config", methods=["GET"])
 def discover_config_get():
@@ -662,8 +824,25 @@ def discover_config_post():
 
 @app.route("/discover/run", methods=["POST"])
 def discover_run():
-    result = _run_discover_once()
+    if not _discover_running.acquire(blocking=False):
+        return jsonify({"status": "busy", "reason": "another discover run in progress"}), 409
+    try:
+        result = _run_discover_once()
+    finally:
+        _discover_running.release()
     code = 200 if result.get("status") in ("ok", "disabled") else 500
+    return jsonify(result), code
+
+
+@app.route("/discover/run_daily", methods=["POST"])
+def discover_run_daily():
+    if not _discover_running.acquire(blocking=False):
+        return jsonify({"status": "busy", "reason": "another discover run in progress"}), 409
+    try:
+        result = _run_discover_daily_once()
+    finally:
+        _discover_running.release()
+    code = 200 if result.get("status") in ("ok", "disabled", "skipped") else 500
     return jsonify(result), code
 
 
@@ -719,6 +898,146 @@ def library_repair():
 @app.route("/library/repair/status", methods=["GET"])
 def repair_status():
     return jsonify(_repair_last_result)
+
+
+# ── Settings helpers ─────────────────────────────────────────────────────────
+
+def _settings_get_by_path(cfg: dict, path: str):
+    """Read a dot-path value from nested dict, returning None if missing."""
+    keys = path.split(".")
+    node = cfg
+    for k in keys:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(k)
+    return node
+
+
+def _settings_set_by_path(cfg: dict, path: str, value) -> None:
+    """Deep-merge a value into cfg at the given dot-path, creating dicts as needed."""
+    keys = path.split(".")
+    node = cfg
+    for k in keys[:-1]:
+        if k not in node or not isinstance(node[k], dict):
+            node[k] = {}
+        node = node[k]
+    node[keys[-1]] = value
+
+
+def _settings_validate_and_coerce(entry: dict, raw_value):
+    """Validate and coerce a value per schema entry type. Returns (coerced, error_str|None)."""
+    typ = entry["type"]
+    if typ == "secret":
+        if raw_value == "" or raw_value is None:
+            return None, None  # empty secret = unchanged
+        if not isinstance(raw_value, str):
+            return None, "expected string"
+        return raw_value, None
+    if typ == "bool":
+        if isinstance(raw_value, bool):
+            return raw_value, None
+        if isinstance(raw_value, str):
+            if raw_value.lower() in ("true", "1", "yes"):
+                return True, None
+            if raw_value.lower() in ("false", "0", "no"):
+                return False, None
+        return None, f"expected bool"
+    if typ == "int":
+        # Reject booleans (bool is subclass of int in Python)
+        if isinstance(raw_value, bool):
+            return None, "expected int"
+        try:
+            v = int(raw_value)
+        except (TypeError, ValueError):
+            return None, "expected int"
+        mn = entry.get("min")
+        mx = entry.get("max")
+        if mn is not None and v < mn:
+            return None, f"must be >= {mn}"
+        if mx is not None and v > mx:
+            return None, f"must be <= {mx}"
+        return v, None
+    if typ == "list[str]":
+        if isinstance(raw_value, list):
+            return [str(x) for x in raw_value], None
+        if isinstance(raw_value, str):
+            lines = [l.strip() for l in raw_value.splitlines() if l.strip()]
+            return lines, None
+        return None, "expected list or newline-separated string"
+    # str — only accept actual strings; reject dicts, None, booleans, etc.
+    if not isinstance(raw_value, str):
+        return None, "expected string"
+    return raw_value, None
+
+
+# ── Settings routes ───────────────────────────────────────────────────────────
+
+@app.route("/settings", methods=["GET"])
+def settings_get():
+    cfg = _get_config()
+    values = {}
+    schema_out = []
+    for entry in SETTINGS_SCHEMA:
+        path = entry["path"]
+        raw = _settings_get_by_path(cfg, path)
+        e = dict(entry)
+        if entry["type"] == "secret":
+            values[path] = {"value": "", "set": bool(raw)}
+        else:
+            values[path] = raw
+        schema_out.append(e)
+    return jsonify({"schema": schema_out, "values": values})
+
+
+@app.route("/settings", methods=["POST"])
+def settings_post():
+    body = request.get_json(force=True, silent=True) or {}
+    schema_by_path = {e["path"]: e for e in SETTINGS_SCHEMA}
+
+    # Check for unknown keys
+    unknown = [k for k in body if k not in schema_by_path]
+    if unknown:
+        return jsonify({"status": "error", "error": "unknown paths", "unknown": unknown}), 400
+
+    # Validate all values first
+    errors = {}
+    coerced = {}
+    for path, raw_value in body.items():
+        entry = schema_by_path[path]
+        value, err = _settings_validate_and_coerce(entry, raw_value)
+        if err:
+            errors[path] = err
+        else:
+            coerced[path] = value
+
+    if errors:
+        return jsonify({"status": "error", "error": "validation errors", "fields": errors}), 400
+
+    # Load current config, apply valid updates
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+
+    for path, value in coerced.items():
+        if value is None:
+            continue  # empty secret = unchanged
+        _settings_set_by_path(cfg, path, value)
+
+    # Atomic write
+    tmp_path = _CONFIG_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, _CONFIG_PATH)
+    except Exception as e:
+        logger.exception("settings_post: write failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+    # Exclude paths where value is None (empty secrets that were skipped)
+    actually_updated = [path for path, value in coerced.items() if value is not None]
+    return jsonify({"status": "ok", "updated": actually_updated})
 
 
 # ── Explore UI ────────────────────────────────────────────────────────────────
@@ -1162,8 +1481,8 @@ def start_background_server(port: int = 5000):
     t_ref = threading.Thread(target=_refresh_sc_client_id_loop, args=(3600,), daemon=True)
     t_ref.start()
 
-    t_disc = threading.Thread(target=_discover_weekly_loop, daemon=True)
-    t_disc.start()
+    t_mix = threading.Thread(target=_mix_scheduler_loop, daemon=True)
+    t_mix.start()
 
     from discover.config import load_config as _load_cfg
     _cfg_at_start = _load_cfg(_CONFIG_PATH)
