@@ -143,6 +143,17 @@ def _run_discover_once():
             logger.info("[DISCOVER] run complete: %s", result)
             return {"status": "ok", **result}
         result = _run_profile_once(profile)
+        if result.get("status") == "skipped":
+            # Last.fm not ready: fall back to run_mix bootstrap (Starter Mix), preserving old behavior
+            logger.info("[DISCOVER] weekly profile skipped (lastfm not ready) — falling back to run_mix bootstrap")
+            deps = _build_discover_deps()
+            if deps is None:
+                return {"status": "disabled", "reason": "navidrome creds missing"}
+            from discover.engine import run_mix
+            cfg = _get_config()
+            mix_result = run_mix(deps, cfg)
+            logger.info("[DISCOVER] bootstrap run complete: %s", mix_result)
+            return {"status": "ok", **mix_result}
         if result.get("status") not in ("busy", "disabled", "error"):
             return {"status": "ok", **result}
         return result
@@ -277,6 +288,39 @@ def _run_profile_once(profile) -> dict:
         _discover_running.release()
 
 
+def _bootstrap_genre_profiles(subsonic) -> int:
+    """Auto-generate genre profiles at startup when none exist yet.
+
+    Spec §Auto-generation trigger: once at server start when no auto_generated
+    profiles exist AND the library has genres. Returns count of profiles created.
+    """
+    try:
+        genres = subsonic.get_genres()
+        if not genres:
+            return 0
+        mixes = _load_mixes()
+        if any(m.get("auto_generated") for m in mixes):
+            return 0  # already bootstrapped
+        from discover.profiles import suggest_genre_profiles
+        new_profiles = suggest_genre_profiles(subsonic, mixes)
+        if not new_profiles:
+            return 0
+        existing_ids = {m["id"] for m in mixes}
+        added = [p for p in new_profiles if p["id"] not in existing_ids]
+        if not added:
+            return 0
+        mixes.extend(added)
+        cfg = _get_config()
+        cfg["mixes"] = mixes
+        _atomic_write_config(cfg)
+        logger.info("[MIXES] bootstrapped %d genre profile(s): %s",
+                    len(added), [p["id"] for p in added])
+        return len(added)
+    except Exception:
+        logger.warning("[MIXES] genre bootstrap failed", exc_info=True)
+        return 0
+
+
 def _mix_scheduler_loop():
     """Unified profile scheduler loop — replaces _discover_weekly_loop + _discover_daily_loop."""
     # Initial run: if discover_state.json has no last_run and library has songs, run weekly
@@ -288,15 +332,19 @@ def _mix_scheduler_loop():
     except Exception:
         has_last_run = False
 
-    if not has_last_run:
-        try:
-            cfg_initial = _get_config()
-            host_i = cfg_initial.get("navidrome_url", "")
-            user_i = cfg_initial.get("navidrome_user", "")
-            pw_i = cfg_initial.get("navidrome_pass", "")
-            if host_i and user_i and pw_i:
-                from discover.subsonic import Subsonic as _Sub
-                sub_i = _Sub(host_i, user_i, pw_i)
+    # Startup: genre bootstrap (always) + initial weekly run (when no last_run)
+    try:
+        cfg_initial = _get_config()
+        host_i = cfg_initial.get("navidrome_url", "")
+        user_i = cfg_initial.get("navidrome_user", "")
+        pw_i   = cfg_initial.get("navidrome_pass", "")
+        if host_i and user_i and pw_i:
+            from discover.subsonic import Subsonic as _Sub
+            sub_i = _Sub(host_i, user_i, pw_i)
+            # Genre bootstrap: create auto profiles if none exist yet
+            _bootstrap_genre_profiles(sub_i)
+            # Initial weekly run on fresh install
+            if not has_last_run:
                 artists_i = sub_i.get_frequent_artists(size=1)
                 if artists_i:
                     logger.info("[MIXES] No last_run found and library has songs — running initial weekly mix")
@@ -304,8 +352,8 @@ def _mix_scheduler_loop():
                     weekly = next((m for m in mixes_init if m.get("id") == "weekly" and m.get("enabled")), None)
                     if weekly:
                         _run_profile_once(weekly)
-        except Exception:
-            logger.warning("[MIXES] initial-run check failed", exc_info=True)
+    except Exception:
+        logger.warning("[MIXES] startup check failed", exc_info=True)
 
     while True:
         try:

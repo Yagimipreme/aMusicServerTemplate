@@ -554,3 +554,117 @@ def test_discover_run_busy_maps_to_409_from_run_profile_once(client, tmp_path):
     assert resp.status_code == 409
     data = _json.loads(resp.data)
     assert data["status"] == "busy"
+
+
+# ── Issue 4: startup genre bootstrap ─────────────────────────────────────────
+
+def test_bootstrap_genre_profiles_creates_and_persists_when_no_auto_generated(tmp_path):
+    """_bootstrap_genre_profiles creates genre profiles when none auto-generated exist."""
+    import json as _json
+    import sWebExt.py_server.server as srv
+    from types import SimpleNamespace
+
+    cfg = {"mixes": [
+        {"id": "weekly", "name": "Weekly Mix", "auto_generated": False,
+         "seeds": {"mode": "history", "genres": [], "artists": [], "playlist": ""},
+         "schedule": {"cadence": "weekly", "run_day": "sunday", "run_hour": 22},
+         "count": 30, "cap": 100, "new_ratio": 1.0, "enabled": True, "quality": {}},
+    ]}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+
+    def fake_suggest(subsonic, existing_mixes, top_n=4):
+        return [{"id": "genre-techno", "name": "Techno Mix", "auto_generated": True,
+                 "enabled": True,
+                 "schedule": {"cadence": "weekly", "run_day": "monday", "run_hour": 7},
+                 "count": 15, "cap": 60, "new_ratio": 0.3,
+                 "seeds": {"mode": "genre", "genres": ["techno"], "artists": [], "playlist": ""},
+                 "quality": {}}]
+
+    fake_subsonic = SimpleNamespace(get_genres=lambda: [{"name": "Techno", "songCount": 50}])
+
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("discover.profiles.suggest_genre_profiles", fake_suggest):
+        result = srv._bootstrap_genre_profiles(fake_subsonic)
+
+    assert result == 1, f"Expected 1 profile created, got {result}"
+    saved = _json.loads(cfg_file.read_text())
+    assert any(m["id"] == "genre-techno" for m in saved["mixes"])
+
+
+def test_bootstrap_genre_profiles_skips_when_auto_generated_exist(tmp_path):
+    """_bootstrap_genre_profiles is a no-op when auto_generated profiles already exist."""
+    import json as _json
+    import sWebExt.py_server.server as srv
+    from types import SimpleNamespace
+
+    cfg = {"mixes": [
+        {"id": "genre-techno", "name": "Techno Mix", "auto_generated": True,
+         "seeds": {"mode": "genre", "genres": ["techno"], "artists": [], "playlist": ""},
+         "schedule": {"cadence": "weekly", "run_day": "monday", "run_hour": 7},
+         "count": 15, "cap": 60, "new_ratio": 0.3, "enabled": True, "quality": {}},
+    ]}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+
+    fake_subsonic = SimpleNamespace(get_genres=lambda: [{"name": "Techno", "songCount": 50}])
+    suggest_calls = []
+
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("discover.profiles.suggest_genre_profiles",
+               side_effect=lambda *a, **kw: suggest_calls.append(1) or []):
+        result = srv._bootstrap_genre_profiles(fake_subsonic)
+
+    assert result == 0
+    assert len(suggest_calls) == 0, "suggest_genre_profiles should not be called when auto-generated exist"
+
+
+def test_bootstrap_genre_profiles_skips_when_no_genres(tmp_path):
+    """_bootstrap_genre_profiles is a no-op when library has no genres."""
+    import json as _json
+    import sWebExt.py_server.server as srv
+    from types import SimpleNamespace
+
+    cfg = {"mixes": []}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    fake_subsonic = SimpleNamespace(get_genres=lambda: [])
+
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
+        result = srv._bootstrap_genre_profiles(fake_subsonic)
+
+    assert result == 0
+
+
+# ── Issue 5: initial-run fallback to run_mix bootstrap ───────────────────────
+
+def test_run_discover_once_falls_back_to_run_mix_when_profile_skipped(client, tmp_path):
+    """_run_discover_once falls back to run_mix (Starter Mix) when weekly profile
+    returns skipped (Last.fm not ready), preserving old bootstrap behavior."""
+    import json as _json
+    cfg = {"discover": {"playlist_name": "Weekly Mix", "run_day": "sunday",
+                        "run_hour": 22, "weekly_count": 30, "playlist_cap": 100}}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    run_mix_calls = []
+
+    def fake_run_mix(deps, cfg):
+        run_mix_calls.append(1)
+        return {"acquired": 5, "m3u": "/tmp/starter.m3u"}
+
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._run_profile_once",
+               return_value={"profile": "weekly", "status": "skipped",
+                             "reason": "lastfm not ready"}), \
+         patch("discover.engine.run_mix", fake_run_mix), \
+         patch("sWebExt.py_server.server._build_discover_deps") as mock_deps:
+        mock_deps.return_value = __import__("types").SimpleNamespace(
+            subsonic=None, search_fn=None, download_fn=None,
+            state=None, song_dir="/tmp", lastfm_client=None,
+        )
+        resp = client.post("/discover/run")
+
+    assert resp.status_code == 200, f"Got {resp.status_code}: {resp.data}"
+    assert len(run_mix_calls) == 1, "run_mix should be called as fallback"
+    data = _json.loads(resp.data)
+    assert data.get("status") == "ok"
