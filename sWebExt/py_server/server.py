@@ -1332,12 +1332,6 @@ def library_suffixes_post():
 
 # ── Explore UI ────────────────────────────────────────────────────────────────
 
-@app.route("/explore", methods=["GET"])
-def explore():
-    hostname = _get_hostname()
-    return render_template("explore.html", hostname=hostname, port=5000)
-
-
 # ── SoundCloud routes ─────────────────────────────────────────────────────────
 
 def _get_sc_client():

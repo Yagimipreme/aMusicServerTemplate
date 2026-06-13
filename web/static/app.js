@@ -794,6 +794,12 @@ async function renderSearch() {
   });
   el.appendChild(srcRow);
 
+  // Artist chips container (SC users)
+  const artistsEl = document.createElement('div');
+  artistsEl.className = 'artists-row';
+  artistsEl.style.display = 'none';
+  el.appendChild(artistsEl);
+
   // Results container
   const resultsEl = document.createElement('div');
   el.appendChild(resultsEl);
@@ -863,7 +869,81 @@ async function renderSearch() {
     return {el: row, source: item.source === 'sc' ? 'soundcloud' : 'youtube'};
   }
 
+  function buildArtistChip(user) {
+    const chip = document.createElement('div');
+    chip.className = 'artist-chip';
+
+    const av = document.createElement('div');
+    av.className = 'a-av';
+    if (user.avatar_url) {
+      const img = document.createElement('img');
+      img.src = user.avatar_url;
+      img.alt = '';
+      img.onerror = () => { img.style.display = 'none'; av.textContent = 'SC'; };
+      av.appendChild(img);
+    } else {
+      av.textContent = 'SC';
+    }
+
+    const info = document.createElement('div');
+    const name = document.createElement('span');
+    name.className = 'a-name';
+    name.textContent = user.full_name || user.username || '';
+    const sub = document.createElement('span');
+    sub.className = 'a-sub';
+    const foll = user.followers_count ? (user.followers_count >= 1000 ? Math.round(user.followers_count / 1000) + 'k' : user.followers_count) + ' followers' : 'SC artist';
+    sub.textContent = foll;
+    info.appendChild(name);
+    info.appendChild(sub);
+
+    chip.appendChild(av);
+    chip.appendChild(info);
+
+    chip.onclick = async () => {
+      artistsEl.style.display = 'none';
+      resultsEl.textContent = '';
+      allResults = [];
+      const loading = document.createElement('div');
+      loading.className = 'warn';
+      loading.textContent = 'Loading tracks for ' + (user.username || '') + '…';
+      resultsEl.appendChild(loading);
+      try {
+        const scUrl = 'https://soundcloud.com/' + encodeURIComponent(user.username);
+        const data = await API('/sc/resolve?url=' + encodeURIComponent(scUrl));
+        resultsEl.textContent = '';
+        if (data.status === 'ok' && data.tracks && data.tracks.length) {
+          data.tracks.forEach(t => {
+            const item = {
+              source: 'sc',
+              title: t.title || '',
+              artist: user.full_name || user.username || '',
+              duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
+              url: t.permalink_url || '',
+            };
+            if (item.url) allResults.push(buildResultRow(item));
+          });
+          applyFilter();
+        } else {
+          const none = document.createElement('div');
+          none.className = 'warn';
+          none.textContent = 'No tracks found for this artist.';
+          resultsEl.appendChild(none);
+        }
+      } catch(e) {
+        resultsEl.textContent = '';
+        const err = document.createElement('div');
+        err.className = 'warn';
+        err.textContent = 'Failed to load artist tracks: ' + (e.message || 'unknown');
+        resultsEl.appendChild(err);
+      }
+    };
+
+    return chip;
+  }
+
   async function doSearch(q) {
+    artistsEl.textContent = '';
+    artistsEl.style.display = 'none';
     resultsEl.textContent = '';
     allResults = [];
 
@@ -872,8 +952,9 @@ async function renderSearch() {
     loadingMsg.textContent = 'Searching…';
     resultsEl.appendChild(loadingMsg);
 
-    // Parallel search
-    const [scRes, ytRes] = await Promise.allSettled([
+    // Parallel search — SC users, SC tracks, YT tracks
+    const [scUsersRes, scRes, ytRes] = await Promise.allSettled([
+      API('/sc/search/users?q=' + encodeURIComponent(q)),
       API('/sc/search/tracks?q=' + encodeURIComponent(q)),
       API('/yt/search?q=' + encodeURIComponent(q)),
     ]);
@@ -889,9 +970,13 @@ async function renderSearch() {
       return;
     }
 
-    // SC first — track shape from _track_from_raw:
-    // {title, artist (top-level, already extracted from user.username),
-    //  permalink_url, duration_ms (milliseconds), source:'sc'}
+    // SC artist chips
+    if (scUsersRes.status === 'fulfilled' && scUsersRes.value.users && scUsersRes.value.users.length) {
+      scUsersRes.value.users.forEach(u => artistsEl.appendChild(buildArtistChip(u)));
+      artistsEl.style.display = '';
+    }
+
+    // SC tracks first — shape: {title, artist, permalink_url, duration_ms}
     if (scRes.status === 'fulfilled' && scRes.value.tracks) {
       scRes.value.tracks.forEach(t => {
         const item = {
@@ -918,7 +1003,7 @@ async function renderSearch() {
       });
     }
 
-    if (allResults.length === 0) {
+    if (allResults.length === 0 && artistsEl.style.display === 'none') {
       const none = document.createElement('div');
       none.className = 'warn';
       none.textContent = 'No results.';

@@ -35,11 +35,6 @@ def test_get_root_returns_app_shell(client):
     assert b'id="nav-mixes"' in resp.data
     assert b'app.css' in resp.data
 
-def test_explore_still_accessible(client):
-    """GET /explore still returns 200 (not removed)."""
-    resp = client.get("/explore")
-    assert resp.status_code == 200
-
 
 def test_enrich_status_returns_idle(client):
     resp = client.get("/library/enrich/status")
@@ -69,11 +64,6 @@ def test_post_download_dispatcher_no_url(client):
     # No matching script: 404
     assert resp.status_code == 404
 
-
-def test_explore_returns_html(client):
-    resp = client.get("/explore")
-    assert resp.status_code == 200
-    assert b"explore" in resp.data.lower()
 
 
 def test_sc_preview_missing_param(client):
