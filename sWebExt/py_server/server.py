@@ -277,6 +277,23 @@ def _profiles_due_now(profiles: list, next_runs: dict, now: datetime.datetime) -
     return due
 
 
+def _record_last_run(profile_id: str) -> None:
+    state_path = os.path.join(_PROJECT_ROOT, "discover_state.json")
+    try:
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            state = {}
+        state.setdefault("last_runs", {})[profile_id] = datetime.datetime.now().isoformat()
+        tmp = state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, state_path)
+    except Exception:
+        logger.warning("[MIXES] could not record last_run for %s", profile_id, exc_info=True)
+
+
 def _run_profile_once(profile) -> dict:
     if not _discover_running.acquire(blocking=False):
         return {"status": "busy", "reason": "another discover run in progress"}
@@ -287,6 +304,7 @@ def _run_profile_once(profile) -> dict:
         from discover.engine import run_profile
         result = run_profile(deps, _get_config(), profile)
         logger.info("[MIXES] %s run complete: %s", profile["id"], result)
+        _record_last_run(profile["id"])
         return result
     except Exception as e:
         logger.exception("[MIXES] %s run failed", profile.get("id"))
@@ -717,7 +735,8 @@ def _get_hostname() -> str:
 
 def _download_url(url: str) -> "str | None":
     """Download url using the sTownload script_web.py download_url function.
-    Returns the first mp3 path downloaded, or None on failure.
+    Applies title cleanup, WOAS tag, and triggers Navidrome scan (same pipeline
+    as script_web.py main()). Returns the first mp3 path downloaded, or None.
     """
     try:
         cfg = _get_config()
@@ -728,7 +747,23 @@ def _download_url(url: str) -> "str | None":
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         _, paths = mod.download_url(url, song_dir)
-        return paths[0] if paths else None
+        if not paths:
+            return None
+        if _PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, _PROJECT_ROOT)
+        for path in paths:
+            try:
+                from library.tagger import apply_from_config
+                apply_from_config(path, _CONFIG_PATH)
+            except Exception:
+                logger.exception("[ACQUIRE] title cleanup failed for %s", path)
+            try:
+                from library.tagger import write_source_url
+                write_source_url(path, url)
+            except Exception:
+                logger.exception("[ACQUIRE] WOAS write failed for %s", path)
+        mod.trigger_navidrome_scan()
+        return paths[0]
     except Exception:
         logger.warning("[ACQUIRE] _download_url failed", exc_info=True)
         return None
@@ -1119,7 +1154,7 @@ def mixes_get():
             state = json.load(f)
     except Exception:
         pass
-    return jsonify({"mixes": mixes, "next_runs": state.get("next_runs", {})})
+    return jsonify({"mixes": mixes, "next_runs": state.get("next_runs", {}), "last_runs": state.get("last_runs", {})})
 
 
 @app.route("/mixes", methods=["POST"])
@@ -1207,7 +1242,10 @@ def yt_search():
     q = (request.args.get("q") or "").strip()
     if not q:
         return jsonify({"status": "error", "error": "q required"}), 400
-    limit = max(1, min(25, int(request.args.get("limit", 10))))
+    try:
+        limit = max(1, min(25, int(request.args.get("limit", 10))))
+    except (TypeError, ValueError):
+        limit = 10
     try:
         proc = subprocess.run(
             ["yt-dlp", "--flat-playlist", "-J", f"ytsearch{limit}:{q}"],
@@ -1238,6 +1276,8 @@ def acquire_url():
     p = urlparse(url)
     if p.scheme not in ("http", "https") or p.hostname not in _ACQUIRE_HOSTS:
         return jsonify({"status": "error", "error": "unsupported url"}), 400
+    if re.search(r'youtube\.com/playlist\?', url, re.IGNORECASE):
+        return jsonify({"status": "error", "error": "playlist URLs not supported; use a single track URL"}), 400
     with _acquire_lock:
         if url in _acquire_inflight:
             return jsonify({"status": "busy", "reason": "already downloading"}), 409
@@ -1261,7 +1301,7 @@ def library_suffixes_get():
     path = os.path.join(_PROJECT_ROOT, suffix_file)
     try:
         with open(path, encoding="utf-8") as f:
-            lines = [l.strip() for l in f if l.strip()]
+            lines = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
     except FileNotFoundError:
         lines = []
     return jsonify({"suffixes": lines})

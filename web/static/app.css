@@ -37,7 +37,7 @@ header .clock{font-family:'JetBrains Mono';color:var(--mut);font-size:.75rem}
 .chev{color:var(--mut);transition:transform .2s;font-size:.7rem}
 .mix.open .chev{transform:rotate(180deg);color:var(--acid)}
 .mix-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
-.mix.open .mix-body{max-height:420px;border-top:1px solid var(--line)}
+.mix.open .mix-body{max-height:1200px;border-top:1px solid var(--line)}
 .mix.open{border-color:#33361f;box-shadow:0 0 0 1px #2a2d18, 0 12px 32px -18px rgba(195,255,61,.25)}
 .mix-body .inner{padding:16px 14px}
 .frow{display:flex;align-items:center;gap:10px;margin-bottom:14px}

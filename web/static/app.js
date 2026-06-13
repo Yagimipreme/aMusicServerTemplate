@@ -15,7 +15,7 @@ function show(name) {
   if (!screenEl || !navEl) return;
   screenEl.classList.add('on');
   navEl.classList.add('on');
-  location.hash = name;
+  if (location.hash.slice(1) !== name) location.hash = name;
   if (screens[name] && screens[name].render) screens[name].render();
 }
 
@@ -50,9 +50,10 @@ async function renderMixes() {
   el.textContent = '';
   const mixes = data.mixes || [];
   const nextRuns = data.next_runs || {};
+  const lastRuns = data.last_runs || {};
 
   mixes.forEach(mix => {
-    el.appendChild(buildMixCard(mix, nextRuns, false));
+    el.appendChild(buildMixCard(mix, nextRuns, false, lastRuns));
   });
 
   // Suggested mixes button (above "+ NEW MIX" so it appears at top of footer)
@@ -92,18 +93,17 @@ async function renderMixes() {
   el.insertBefore(newBtn, sugBtn);
 }
 
-function isFresh(mix, nextRuns) {
-  const nr = nextRuns[mix.id];
-  if (!nr) return false;
-  const nextMs = new Date(nr).getTime();
+function isFresh(mix, lastRuns) {
+  const lr = lastRuns && lastRuns[mix.id];
+  if (!lr) return false;
+  const lastMs = new Date(lr).getTime();
   const nowMs = Date.now();
   const cadence = (mix.schedule || {}).cadence === 'weekly' ? 7 * 24 * 3600 * 1000 : 24 * 3600 * 1000;
-  // Fresh = next run is within one cadence from now (last run was recent)
-  return (nextMs - nowMs) < cadence;
+  return (nowMs - lastMs) < cadence;
 }
 
-function buildMixCard(mix, nextRuns, isNew) {
-  const fresh = !isNew && isFresh(mix, nextRuns);
+function buildMixCard(mix, nextRuns, isNew, lastRuns) {
+  const fresh = !isNew && isFresh(mix, lastRuns);
   const suggested = mix.auto_generated && !mix.enabled;
 
   const card = document.createElement('div');
@@ -365,7 +365,7 @@ function buildMixCard(mix, nextRuns, isNew) {
       statusLine.style.display = '';
       statusLine.textContent = 'Starting run…';
       try {
-        const result = await API('/mixes/' + mix.id + '/run', {method: 'POST'});
+        const result = await API('/mixes/' + encodeURIComponent(mix.id) + '/run', {method: 'POST'});
         const parts = [];
         if (result.acquired !== undefined) parts.push('acquired: ' + result.acquired);
         if (result.library_added !== undefined) parts.push('added: ' + result.library_added);
@@ -448,7 +448,7 @@ function buildMixCard(mix, nextRuns, isNew) {
       const label = mix.name || mix.id;
       if (!confirm('Delete ' + label + '?')) return;
       try {
-        await API('/mixes/' + mix.id, {method: 'DELETE'});
+        await API('/mixes/' + encodeURIComponent(mix.id), {method: 'DELETE'});
         renderMixes();
       } catch(e) {
         statusLine.style.display = '';
@@ -466,8 +466,15 @@ function buildMixCard(mix, nextRuns, isNew) {
 
 // ── Library screen ────────────────────────────────────────────────────────────
 
+// Hoisted to module scope so timers survive across re-renders and can be cleared
+let enrichPollTimer = null;
+let repairPollTimer = null;
+
 async function renderLibrary() {
   const el = document.getElementById('s-library');
+  // Clear any running poll timers from a previous render
+  if (enrichPollTimer) { clearInterval(enrichPollTimer); enrichPollTimer = null; }
+  if (repairPollTimer) { clearInterval(repairPollTimer); repairPollTimer = null; }
   el.textContent = '';
 
   // Card builder helper
@@ -494,7 +501,6 @@ async function renderLibrary() {
   }
 
   // 1. Enrich metadata
-  let enrichPollTimer = null;
   const enrichCard = makeToolCard('Enrich metadata', 'tag files with Last.fm genre data', 'run', async () => {
     enrichCard._btn.disabled = true;
     try {
@@ -560,7 +566,6 @@ async function renderLibrary() {
   el.appendChild(enrichCard);
 
   // 2. Repair library
-  let repairPollTimer = null;
   const repairCard = makeToolCard('Repair library', 'fix missing artist tags via MusicBrainz', 'run', async () => {
     repairCard._btn.disabled = true;
     try {
@@ -623,7 +628,7 @@ async function renderLibrary() {
   el.appendChild(repairCard);
 
   // 3. De-duplicate
-  const dedupCard = makeToolCard('De-duplicate', 'scanning…', 'run', async () => {
+  const dedupCard = makeToolCard('De-duplicate', 'tap run to scan', 'run', async () => {
     dedupCard._btn.disabled = true;
     dedupCard._statusSpan.textContent = 'running…';
     try {
@@ -635,10 +640,6 @@ async function renderLibrary() {
       dedupCard._btn.disabled = false;
     }
   });
-  // Load initial dedup report count
-  API('/library/dedup/report', {method: 'POST'}).then(r => {
-    dedupCard._statusSpan.textContent = (r.duplicates || 0) + ' candidates found';
-  }).catch(() => {});
   el.appendChild(dedupCard);
 
   // 4. Title cleanup (with expand panel)
@@ -879,6 +880,14 @@ async function renderSearch() {
 
     resultsEl.textContent = '';
     allResults = [];
+
+    if (scRes.status === 'rejected' && ytRes.status === 'rejected') {
+      const errEl = document.createElement('div');
+      errEl.className = 'warn';
+      errEl.textContent = 'Search failed: ' + ((scRes.reason && scRes.reason.message) || 'network error');
+      resultsEl.appendChild(errEl);
+      return;
+    }
 
     // SC first — track shape from _track_from_raw:
     // {title, artist (top-level, already extracted from user.username),
