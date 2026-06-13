@@ -35,7 +35,14 @@
     "junk_keywords": [],
     "min_artist_listeners": 5000,
     "candidate_oversample": 3,
-    "seed_playlist": ""
+    "seed_playlist": "",
+    "daily": {
+      "enabled": false,
+      "count": 7,
+      "run_hour": 7,
+      "window_days": 7,
+      "playlist_name": "Daily Mix"
+    }
   },
   "repair": {
     "enabled": true,

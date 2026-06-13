@@ -28,6 +28,10 @@ _LOG_DIR      = os.path.join(_PROJECT_ROOT, "logs")
 _TEMPLATE_DIR = os.path.join(_PROJECT_ROOT, "web", "templates")
 _STATIC_DIR   = os.path.join(_PROJECT_ROOT, "web", "static")
 
+# Resolve yt-dlp once at startup: prefer the venv's copy so it's always found
+# even when the server is started from a shell without the venv activated.
+_YT_DLP = shutil.which("yt-dlp") or os.path.join(os.path.dirname(sys.executable), "yt-dlp")
+
 os.makedirs(_LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(_LOG_DIR, "server.log")
 
@@ -1248,7 +1252,7 @@ def yt_search():
         limit = 10
     try:
         proc = subprocess.run(
-            ["yt-dlp", "--flat-playlist", "-J", f"ytsearch{limit}:{q}"],
+            [_YT_DLP, "--flat-playlist", "-J", f"ytsearch{limit}:{q}"],
             capture_output=True, text=True, timeout=10)
         data = json.loads(proc.stdout or "{}")
         results = [{

@@ -11,8 +11,12 @@ def _normalize(s):
 
 
 def _make_record(path, artist, title, has_tags):
-    key = f"{_normalize(artist)}|{_normalize(title)}"
-    if not key.replace("|", "").strip():
+    # Key on title only so files with matching titles but different/missing artist tags
+    # are still caught as duplicates (common after downloading from different sources).
+    norm_title = _normalize(title)
+    if norm_title:
+        key = norm_title
+    else:
         key = _normalize(os.path.splitext(os.path.basename(path))[0])
     return {"path": path, "key": key, "artist": artist, "title": title, "has_tags": has_tags}
 

@@ -42,7 +42,7 @@ class DiscoverState:
         pruned = {k: ts for k, ts in self._suggested.items()
                   if _within_ttl(ts, self._ttl_days, now)}
 
-        # Preserve keys we don't own (e.g. lastfm_ready)
+        # Preserve keys we don't own (e.g. lastfm_ready) and merge existing suggested
         existing = {}
         if os.path.exists(self._path):
             try:
@@ -50,7 +50,15 @@ class DiscoverState:
                     existing = json.load(f)
             except Exception:
                 pass
-        existing.update({"suggested": pruned, "last_run": self._last_run})
+        # Merge: start with the file's suggested dict (preserving keys not in memory),
+        # then overlay the in-memory pruned dict so our entries win on conflicts.
+        file_suggested = existing.get("suggested") or {}
+        if not isinstance(file_suggested, dict):
+            file_suggested = {}
+        file_suggested = {k: ts for k, ts in file_suggested.items()
+                          if _within_ttl(ts, self._ttl_days, now)}
+        merged_suggested = {**file_suggested, **pruned}
+        existing.update({"suggested": merged_suggested, "last_run": self._last_run})
 
         tmp = self._path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:

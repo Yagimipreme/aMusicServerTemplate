@@ -6,8 +6,11 @@ const API = (path, opts) => fetch(path, opts).then(async r => {
 });
 
 const screens = {};  // name -> {el, render}
+let _currentScreen = null;
 
 function show(name) {
+  if (name === _currentScreen) return;
+  _currentScreen = name;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('on'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('on'));
   const screenEl = document.getElementById('s-' + name);
@@ -471,54 +474,60 @@ let enrichPollTimer = null;
 let repairPollTimer = null;
 
 async function renderLibrary() {
-  const el = document.getElementById('s-library');
-  // Clear any running poll timers from a previous render
   if (enrichPollTimer) { clearInterval(enrichPollTimer); enrichPollTimer = null; }
   if (repairPollTimer) { clearInterval(repairPollTimer); repairPollTimer = null; }
+
+  const el = document.getElementById('s-library');
   el.textContent = '';
 
-  // Card builder helper
+  // ── Card builder ──────────────────────────────────────────────────────────────
   function makeToolCard(title, desc, goLabel, goHandler) {
     const tool = document.createElement('div');
     tool.className = 'tool';
-    const name = document.createElement('div');
-    name.className = 't-name';
+    const nameEl = document.createElement('div');
+    nameEl.className = 't-name';
     const b = document.createElement('b');
     b.textContent = title;
     const span = document.createElement('span');
     span.textContent = desc;
-    name.appendChild(b);
-    name.appendChild(span);
+    nameEl.appendChild(b);
+    nameEl.appendChild(span);
     const btn = document.createElement('button');
     btn.className = 'go';
     btn.textContent = goLabel;
     btn.onclick = goHandler;
-    tool.appendChild(name);
+    tool.appendChild(nameEl);
     tool.appendChild(btn);
     tool._statusSpan = span;
     tool._btn = btn;
     return tool;
   }
 
-  // 1. Enrich metadata
-  const enrichCard = makeToolCard('Enrich metadata', 'tag files with Last.fm genre data', 'run', async () => {
-    enrichCard._btn.disabled = true;
-    try {
-      await API('/library/enrich', {method: 'POST'});
-      pollEnrich();
-    } catch(e) {
-      enrichCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
-      enrichCard._btn.disabled = false;
+  function makeBar() {
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.style.display = 'none';
+    const inner = document.createElement('i');
+    inner.style.width = '0%';
+    bar.appendChild(inner);
+    bar._inner = inner;
+    return bar;
+  }
+
+  // ── 1. Enrich metadata ────────────────────────────────────────────────────────
+  const enrichCard = makeToolCard(
+    'Enrich metadata',
+    'add Last.fm genre tags to your MP3s',
+    'run',
+    async () => {
+      enrichCard._btn.disabled = true;
+      try { await API('/library/enrich', {method: 'POST'}); pollEnrich(); }
+      catch(e) { enrichCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown'); enrichCard._btn.disabled = false; }
     }
-  });
-  // Progress bar
-  const enrichBar = document.createElement('div');
-  enrichBar.className = 'bar';
-  enrichBar.style.display = 'none';
-  const enrichBarInner = document.createElement('i');
-  enrichBarInner.style.width = '0%';
-  enrichBar.appendChild(enrichBarInner);
+  );
+  const enrichBar = makeBar();
   enrichCard.querySelector('.t-name').appendChild(enrichBar);
+  el.appendChild(enrichCard);  // appended synchronously — no race
 
   function pollEnrich() {
     if (enrichPollTimer) clearInterval(enrichPollTimer);
@@ -526,20 +535,15 @@ async function renderLibrary() {
       try {
         const s = await API('/library/enrich/status');
         if (s.status === 'running' || s.status === 'started') {
-          enrichCard._btn.textContent = 'view';
+          enrichCard._btn.textContent = 'running';
           enrichBar.style.display = '';
           if (s.files_total && s.files_done !== undefined) {
-            const pct = Math.round(s.files_done / s.files_total * 100);
-            enrichBarInner.style.width = pct + '%';
-            enrichCard._statusSpan.textContent = 'running — ' + s.files_done + ' / ' + s.files_total + ' files';
-          } else {
-            enrichCard._statusSpan.textContent = 'running…';
-          }
+            enrichBar._inner.style.width = Math.round(s.files_done / s.files_total * 100) + '%';
+            enrichCard._statusSpan.textContent = s.files_done + ' / ' + s.files_total + ' files';
+          } else { enrichCard._statusSpan.textContent = 'running…'; }
         } else {
-          clearInterval(enrichPollTimer);
-          enrichPollTimer = null;
-          enrichCard._btn.disabled = false;
-          enrichCard._btn.textContent = 'run';
+          clearInterval(enrichPollTimer); enrichPollTimer = null;
+          enrichCard._btn.disabled = false; enrichCard._btn.textContent = 'run';
           enrichBar.style.display = 'none';
           if (s.status === 'ok' && s.enriched !== undefined) {
             enrichCard._statusSpan.textContent = 'last run: ' + s.enriched + ' enriched';
@@ -549,40 +553,25 @@ async function renderLibrary() {
             enrichCard._statusSpan.textContent = s.status + (s.reason ? ': ' + s.reason : '');
           }
         }
-      } catch(e) { /* ignore poll errors */ }
+      } catch(e) {}
     }, 2000);
   }
-  // Check initial enrich status
-  try {
-    const s = await API('/library/enrich/status');
-    if (s.status === 'running' || s.status === 'started') {
-      pollEnrich();
-    } else if (s.status === 'ok' && s.enriched !== undefined) {
-      enrichCard._statusSpan.textContent = 'last run: ' + s.enriched + ' enriched';
-    } else if (s.status === 'idle') {
-      enrichCard._statusSpan.textContent = 'not run yet';
-    }
-  } catch(e) {}
-  el.appendChild(enrichCard);
 
-  // 2. Repair library
-  const repairCard = makeToolCard('Repair library', 'fix missing artist tags via MusicBrainz', 'run', async () => {
-    repairCard._btn.disabled = true;
-    try {
-      await API('/library/repair', {method: 'POST'});
-      pollRepair();
-    } catch(e) {
-      repairCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
-      repairCard._btn.disabled = false;
+  // ── 2. Repair library ─────────────────────────────────────────────────────────
+  // Scans MP3s with missing artist tags, looks them up in MusicBrainz, writes the tag.
+  const repairCard = makeToolCard(
+    'Repair library',
+    'fill missing artist tags via MusicBrainz',
+    'run',
+    async () => {
+      repairCard._btn.disabled = true;
+      try { await API('/library/repair', {method: 'POST'}); pollRepair(); }
+      catch(e) { repairCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown'); repairCard._btn.disabled = false; }
     }
-  });
-  const repairBar = document.createElement('div');
-  repairBar.className = 'bar';
-  repairBar.style.display = 'none';
-  const repairBarInner = document.createElement('i');
-  repairBarInner.style.width = '0%';
-  repairBar.appendChild(repairBarInner);
+  );
+  const repairBar = makeBar();
   repairCard.querySelector('.t-name').appendChild(repairBar);
+  el.appendChild(repairCard);  // appended synchronously
 
   function pollRepair() {
     if (repairPollTimer) clearInterval(repairPollTimer);
@@ -590,18 +579,15 @@ async function renderLibrary() {
       try {
         const s = await API('/library/repair/status');
         if (s.status === 'running' || s.status === 'started') {
-          repairCard._btn.textContent = 'view';
+          repairCard._btn.textContent = 'running';
           repairBar.style.display = '';
           if (s.files_total && s.files_done !== undefined) {
-            const pct = Math.round(s.files_done / s.files_total * 100);
-            repairBarInner.style.width = pct + '%';
+            repairBar._inner.style.width = Math.round(s.files_done / s.files_total * 100) + '%';
           }
           repairCard._statusSpan.textContent = 'running…';
         } else {
-          clearInterval(repairPollTimer);
-          repairPollTimer = null;
-          repairCard._btn.disabled = false;
-          repairCard._btn.textContent = 'run';
+          clearInterval(repairPollTimer); repairPollTimer = null;
+          repairCard._btn.disabled = false; repairCard._btn.textContent = 'run';
           repairBar.style.display = 'none';
           if (s.status === 'ok' && s.fixed !== undefined) {
             repairCard._statusSpan.textContent = 'last run: ' + s.fixed + ' fixed';
@@ -614,26 +600,15 @@ async function renderLibrary() {
       } catch(e) {}
     }, 2000);
   }
-  // Check initial repair status
-  try {
-    const s = await API('/library/repair/status');
-    if (s.status === 'running' || s.status === 'started') {
-      pollRepair();
-    } else if (s.status === 'ok' && s.fixed !== undefined) {
-      repairCard._statusSpan.textContent = 'last run: ' + s.fixed + ' fixed';
-    } else if (s.status === 'idle') {
-      repairCard._statusSpan.textContent = 'not run yet';
-    }
-  } catch(e) {}
-  el.appendChild(repairCard);
 
-  // 3. De-duplicate
-  const dedupCard = makeToolCard('De-duplicate', 'tap run to scan', 'run', async () => {
+  // ── 3. De-duplicate ───────────────────────────────────────────────────────────
+  const dedupCard = makeToolCard('De-duplicate', 'find files with identical titles', 'run', async () => {
     dedupCard._btn.disabled = true;
-    dedupCard._statusSpan.textContent = 'running…';
+    dedupCard._statusSpan.textContent = 'scanning…';
     try {
       const r = await API('/library/dedup/run', {method: 'POST'});
-      dedupCard._statusSpan.textContent = (r.duplicates || 0) + ' duplicates found';
+      const n = (r.would_delete || []).length;
+      dedupCard._statusSpan.textContent = n ? n + ' duplicates found' : 'no duplicates';
     } catch(e) {
       dedupCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
     } finally {
@@ -642,9 +617,9 @@ async function renderLibrary() {
   });
   el.appendChild(dedupCard);
 
-  // 4. Title cleanup (with expand panel)
+  // ── 4. Title cleanup ──────────────────────────────────────────────────────────
   let suffixesExpanded = false;
-  const suffixCard = makeToolCard('Title cleanup', 'suffix list', 'edit', () => {
+  const suffixCard = makeToolCard('Title cleanup', 'strip junk suffixes from track titles', 'edit', () => {
     suffixesExpanded = !suffixesExpanded;
     suffixPanel.style.display = suffixesExpanded ? '' : 'none';
     suffixCard._btn.textContent = suffixesExpanded ? 'close' : 'edit';
@@ -666,93 +641,48 @@ async function renderLibrary() {
     suffixSaveBtn.disabled = true;
     try {
       await API('/library/suffixes', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({suffixes: lines})});
-      suffixCard._statusSpan.textContent = 'suffix list · ' + lines.length + ' rules';
+      suffixCard._statusSpan.textContent = lines.length + ' rules';
     } catch(e) {
-      suffixCard._statusSpan.textContent = 'save failed: ' + (e.message || 'unknown');
-    } finally {
-      suffixSaveBtn.disabled = false;
-    }
+      suffixCard._statusSpan.textContent = 'save failed';
+    } finally { suffixSaveBtn.disabled = false; }
   };
   suffixPanel.appendChild(suffixTextarea);
   suffixPanel.appendChild(suffixSaveBtn);
 
-  async function loadSuffixes() {
-    try {
-      const r = await API('/library/suffixes');
-      suffixTextarea.value = (r.suffixes || []).join('\n');
-      suffixCard._statusSpan.textContent = 'suffix list · ' + (r.suffixes || []).length + ' rules';
-    } catch(e) {}
-  }
-  loadSuffixes();
-
-  // Wrap suffix card in a column container to allow panel expansion
   const suffixWrapper = document.createElement('div');
   suffixWrapper.className = 'tool';
-  suffixWrapper.style.flexDirection = 'column';
-  suffixWrapper.style.alignItems = 'stretch';
-  suffixWrapper.style.padding = '0';
+  suffixWrapper.style.cssText = 'flex-direction:column;align-items:stretch;padding:0';
   const suffixRow = document.createElement('div');
   suffixRow.style.cssText = 'display:flex;align-items:center;gap:12px;padding:15px 14px';
   suffixRow.appendChild(suffixCard.querySelector('.t-name'));
   suffixRow.appendChild(suffixCard.querySelector('.go'));
   suffixWrapper.appendChild(suffixRow);
   suffixWrapper.appendChild(suffixPanel);
-  suffixWrapper._statusSpan = suffixCard._statusSpan;
-  suffixWrapper._btn = suffixCard._btn;
-  el.appendChild(suffixWrapper);
+  el.appendChild(suffixWrapper);  // appended synchronously
 
-  // 5. Import
-  let importExpanded = false;
-  const importCard = makeToolCard('Import', 'SoundCloud likes · Spotify playlists', 'open', () => {
-    importExpanded = !importExpanded;
-    importPanel.style.display = importExpanded ? '' : 'none';
-    importCard._btn.textContent = importExpanded ? 'close' : 'open';
-  });
-
-  const importPanel = document.createElement('div');
-  importPanel.style.display = 'none';
-  importPanel.style.padding = '10px 14px';
-  importPanel.style.borderTop = '1px solid var(--line)';
-  const importUrlInput = document.createElement('input');
-  importUrlInput.className = 'txt';
-  importUrlInput.type = 'text';
-  importUrlInput.placeholder = 'paste SoundCloud/YouTube URL…';
-  importUrlInput.style.width = '100%';
-  importUrlInput.style.marginBottom = '8px';
-  const importBtn = document.createElement('button');
-  importBtn.className = 'btn run';
-  importBtn.style.width = '100%';
-  importBtn.textContent = '▶ download';
-  importBtn.onclick = async () => {
-    const url = importUrlInput.value.trim();
-    if (!url) return;
-    importBtn.disabled = true;
-    importBtn.textContent = 'downloading…';
+  // ── Async status checks (cards already in DOM, just update text) ─────────────
+  async function loadSuffixes() {
     try {
-      await API('/', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url, m3u: 'imported'})});
-      importBtn.textContent = '✓ started';
-    } catch(e) {
-      importBtn.textContent = 'Error: ' + (e.message || 'failed');
-    } finally {
-      importBtn.disabled = false;
-    }
-  };
-  importPanel.appendChild(importUrlInput);
-  importPanel.appendChild(importBtn);
+      const r = await API('/library/suffixes');
+      suffixTextarea.value = (r.suffixes || []).join('\n');
+      suffixCard._statusSpan.textContent = (r.suffixes || []).length + ' rules';
+    } catch(e) {}
+  }
+  loadSuffixes();
 
-  // Wrap import card in a column container to allow panel expansion
-  const importWrapper = document.createElement('div');
-  importWrapper.className = 'tool';
-  importWrapper.style.flexDirection = 'column';
-  importWrapper.style.alignItems = 'stretch';
-  importWrapper.style.padding = '0';
-  const importRow = document.createElement('div');
-  importRow.style.cssText = 'display:flex;align-items:center;gap:12px;padding:15px 14px';
-  importRow.appendChild(importCard.querySelector('.t-name'));
-  importRow.appendChild(importCard.querySelector('.go'));
-  importWrapper.appendChild(importRow);
-  importWrapper.appendChild(importPanel);
-  el.appendChild(importWrapper);
+  try {
+    const s = await API('/library/enrich/status');
+    if (s.status === 'running' || s.status === 'started') { pollEnrich(); }
+    else if (s.status === 'ok' && s.enriched !== undefined) { enrichCard._statusSpan.textContent = 'last run: ' + s.enriched + ' enriched'; }
+    else if (s.status === 'idle') { enrichCard._statusSpan.textContent = 'not run yet'; }
+  } catch(e) {}
+
+  try {
+    const s = await API('/library/repair/status');
+    if (s.status === 'running' || s.status === 'started') { pollRepair(); }
+    else if (s.status === 'ok' && s.fixed !== undefined) { repairCard._statusSpan.textContent = 'last run: ' + s.fixed + ' fixed'; }
+    else if (s.status === 'idle') { repairCard._statusSpan.textContent = 'not run yet'; }
+  } catch(e) {}
 }
 
 // ── Search screen ─────────────────────────────────────────────────────────────
@@ -820,13 +750,22 @@ async function renderSearch() {
   }
 
   function buildResultRow(item) {
-    // item: {source:'sc'|'yt', title, artist, duration (seconds), url}
+    // item: {source:'sc'|'yt', title, artist, duration (seconds), url, artwork_url?}
     const row = document.createElement('div');
     row.className = 'result';
 
     const cover = document.createElement('div');
     cover.className = 'cover';
-    cover.textContent = item.source === 'sc' ? 'SC' : 'YT';
+    if (item.artwork_url) {
+      const img = document.createElement('img');
+      img.src = item.artwork_url;
+      img.alt = '';
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:3px';
+      img.onerror = () => { img.remove(); cover.textContent = 'SC'; };
+      cover.appendChild(img);
+    } else {
+      cover.textContent = item.source === 'sc' ? 'SC' : 'YT';
+    }
     row.appendChild(cover);
 
     const meta = document.createElement('div');
@@ -834,7 +773,9 @@ async function renderSearch() {
     const title = document.createElement('b');
     title.textContent = item.title || '(untitled)';
     const sub = document.createElement('span');
-    const subParts = [item.artist || ''];
+    const rawArtist = item.artist || '';
+    const displayArtist = rawArtist.length > 30 ? rawArtist.slice(0, 30) + '…' : rawArtist;
+    const subParts = [displayArtist];
     if (item.duration) subParts.push(formatDur(item.duration));
     sub.textContent = subParts.filter(Boolean).join(' · ');
     meta.appendChild(title);
@@ -847,6 +788,7 @@ async function renderSearch() {
     getBtn.onclick = async () => {
       if (getBtn.classList.contains('have')) return;
       getBtn.disabled = true;
+      getBtn.textContent = '…';
       try {
         await API('/acquire', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url: item.url})});
         getBtn.textContent = '✓';
@@ -854,7 +796,7 @@ async function renderSearch() {
         getBtn.disabled = false;
       } catch(e) {
         if (e.status === 409) {
-          getBtn.textContent = '…';
+          getBtn.textContent = 'dup';
           getBtn.disabled = false;
           setTimeout(() => { getBtn.textContent = '+'; }, 3000);
         } else {
@@ -919,6 +861,7 @@ async function renderSearch() {
               artist: user.full_name || user.username || '',
               duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
               url: t.permalink_url || '',
+              artwork_url: t.artwork_url || null,
             };
             if (item.url) allResults.push(buildResultRow(item));
           });
@@ -985,6 +928,7 @@ async function renderSearch() {
           artist: t.artist || '',
           duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
           url: t.permalink_url || '',
+          artwork_url: t.artwork_url || null,
         };
         if (item.url) allResults.push(buildResultRow(item));
       });

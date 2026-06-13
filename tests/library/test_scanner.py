@@ -13,7 +13,7 @@ def test_normalize_strips_and_casefolds():
 
 def test_make_record_uses_id3_key_when_tags_present():
     r = _make_record("/path/song.mp3", "Boards of Canada", "Roygbiv", True)
-    assert r["key"] == "boards of canada|roygbiv"
+    assert r["key"] == "roygbiv"
     assert r["has_tags"] is True
     assert r["artist"] == "Boards of Canada"
     assert r["title"] == "Roygbiv"
