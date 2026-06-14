@@ -1222,6 +1222,454 @@ async function renderSetup() {
   });
 }
 
+// ── Follows screen ────────────────────────────────────────────────────────────
+
+function updateFollowsBadge(count) {
+  const badge = document.getElementById('follows-badge');
+  if (!badge) return;
+  if (count && count > 0) {
+    badge.textContent = String(count);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function renderFollows() {
+  const el = document.getElementById('s-follows');
+  el.textContent = '';
+
+  // ── Section header helper ──
+  function makeSection(title) {
+    const sec = document.createElement('div');
+    sec.className = 'follows-section';
+    const h = document.createElement('div');
+    h.className = 'follows-heading';
+    h.textContent = title;
+    sec.appendChild(h);
+    return sec;
+  }
+
+  // ── Status line helper ──
+  function makeStatus() {
+    const s = document.createElement('div');
+    s.className = 'warn';
+    s.style.display = 'none';
+    return s;
+  }
+
+  function showStatus(s, msg) {
+    s.textContent = msg;
+    s.style.display = '';
+  }
+
+  function hideStatus(s) {
+    s.style.display = 'none';
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // 1. SEARCH section
+  // ═══════════════════════════════════════════════════════
+  const searchSec = makeSection('Search artists');
+  el.appendChild(searchSec);
+
+  const searchBox = document.createElement('div');
+  searchBox.className = 'searchbox';
+  const searchInput = document.createElement('input');
+  searchInput.placeholder = 'artist name…';
+  const searchBtn = document.createElement('button');
+  searchBtn.className = 'btn run';
+  searchBtn.style.flex = '0 0 auto';
+  searchBtn.textContent = 'Search';
+  searchBox.appendChild(searchInput);
+  searchBox.appendChild(searchBtn);
+  searchSec.appendChild(searchBox);
+
+  const searchStatus = makeStatus();
+  searchSec.appendChild(searchStatus);
+
+  const searchResults = document.createElement('div');
+  searchSec.appendChild(searchResults);
+
+  async function doArtistSearch() {
+    const q = searchInput.value.trim();
+    if (!q) return;
+    searchResults.textContent = '';
+    searchBtn.disabled = true;
+    showStatus(searchStatus, 'Searching…');
+    let data;
+    try {
+      data = await API('/follow/search?q=' + encodeURIComponent(q));
+      hideStatus(searchStatus);
+    } catch(e) {
+      showStatus(searchStatus, 'Search failed: ' + (e.message || 'unknown'));
+      searchBtn.disabled = false;
+      return;
+    }
+    searchBtn.disabled = false;
+    const results = data.results || [];
+    if (!results.length) {
+      showStatus(searchStatus, 'No results.');
+      return;
+    }
+    results.forEach(artist => {
+      const row = document.createElement('div');
+      row.className = 'follows-row';
+
+      const info = document.createElement('div');
+      info.className = 'follows-info';
+
+      const name = document.createElement('span');
+      name.className = 'follows-name';
+      name.textContent = artist.name || '';
+      info.appendChild(name);
+
+      if (artist.disambiguation) {
+        const dis = document.createElement('span');
+        dis.className = 'follows-dis';
+        dis.textContent = artist.disambiguation;
+        info.appendChild(dis);
+      }
+
+      row.appendChild(info);
+
+      const followBtn = document.createElement('button');
+      followBtn.className = 'btn ghost';
+      followBtn.style.flex = '0 0 auto';
+      followBtn.textContent = 'Follow';
+      followBtn.onclick = async () => {
+        followBtn.disabled = true;
+        followBtn.textContent = '…';
+        try {
+          await API('/follow', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              mbid: artist.mbid,
+              name: artist.name,
+              disambiguation: artist.disambiguation || '',
+            }),
+          });
+          followBtn.textContent = '✓';
+          loadFollowedList();
+        } catch(e) {
+          followBtn.textContent = '!';
+          followBtn.disabled = false;
+          setTimeout(() => { followBtn.textContent = 'Follow'; followBtn.disabled = false; }, 2000);
+        }
+      };
+      row.appendChild(followBtn);
+      searchResults.appendChild(row);
+    });
+  }
+
+  searchBtn.onclick = doArtistSearch;
+  searchInput.onkeydown = e => { if (e.key === 'Enter') doArtistSearch(); };
+
+  // ═══════════════════════════════════════════════════════
+  // 2. FOLLOWED ARTISTS section
+  // ═══════════════════════════════════════════════════════
+  const followedSec = makeSection('Following');
+  el.appendChild(followedSec);
+
+  const followedStatus = makeStatus();
+  followedSec.appendChild(followedStatus);
+
+  const followedList = document.createElement('div');
+  followedSec.appendChild(followedList);
+
+  async function loadFollowedList() {
+    followedList.textContent = '';
+    let data;
+    try {
+      data = await API('/follow');
+    } catch(e) {
+      showStatus(followedStatus, 'Failed to load: ' + (e.message || 'unknown'));
+      return;
+    }
+    hideStatus(followedStatus);
+    const artists = data.artists || [];
+    if (!artists.length) {
+      showStatus(followedStatus, 'Not following anyone yet.');
+      return;
+    }
+    artists.forEach(artist => {
+      const row = document.createElement('div');
+      row.className = 'follows-row';
+
+      const info = document.createElement('div');
+      info.className = 'follows-info';
+
+      const name = document.createElement('span');
+      name.className = 'follows-name';
+      name.textContent = artist.name || '';
+      info.appendChild(name);
+
+      if (artist.disambiguation) {
+        const dis = document.createElement('span');
+        dis.className = 'follows-dis';
+        dis.textContent = artist.disambiguation;
+        info.appendChild(dis);
+      }
+
+      row.appendChild(info);
+
+      const unfollowBtn = document.createElement('button');
+      unfollowBtn.className = 'btn del';
+      unfollowBtn.style.flex = '0 0 auto';
+      unfollowBtn.textContent = 'Unfollow';
+      unfollowBtn.onclick = async () => {
+        unfollowBtn.disabled = true;
+        try {
+          await API('/follow/' + encodeURIComponent(artist.mbid), {method: 'DELETE'});
+          loadFollowedList();
+        } catch(e) {
+          unfollowBtn.disabled = false;
+          showStatus(followedStatus, 'Unfollow failed: ' + (e.message || 'unknown'));
+        }
+      };
+      row.appendChild(unfollowBtn);
+      followedList.appendChild(row);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // 3. NEW RELEASES feed section
+  // ═══════════════════════════════════════════════════════
+  const feedSec = makeSection('New releases');
+  el.appendChild(feedSec);
+
+  const runStatus = makeStatus();
+  feedSec.appendChild(runStatus);
+
+  const runBtn = document.createElement('button');
+  runBtn.className = 'btn run';
+  runBtn.style.marginBottom = '10px';
+  runBtn.textContent = '▶ run now';
+  runBtn.onclick = async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = '…';
+    showStatus(runStatus, 'Running…');
+    try {
+      const r = await API('/follow/run', {method: 'POST'});
+      if (r.status === 'disabled') {
+        showStatus(runStatus, 'Disabled — Navidrome credentials missing.');
+      } else {
+        showStatus(runStatus, 'Done. acquired: ' + (r.acquired || 0) + ', unavailable: ' + (r.unavailable || 0));
+        loadFeed();
+      }
+    } catch(e) {
+      showStatus(runStatus, 'Run failed: ' + (e.message || 'unknown'));
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = '▶ run now';
+    }
+  };
+  feedSec.appendChild(runBtn);
+
+  const feedList = document.createElement('div');
+  feedSec.appendChild(feedList);
+
+  async function loadFeed() {
+    feedList.textContent = '';
+    let data;
+    try {
+      data = await API('/follow/feed');
+    } catch(e) {
+      const err = document.createElement('div');
+      err.className = 'warn';
+      err.textContent = 'Failed to load feed: ' + (e.message || 'unknown');
+      feedList.appendChild(err);
+      return;
+    }
+    const items = data.feed || [];
+    updateFollowsBadge(0);
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'warn';
+      empty.textContent = 'No releases yet — follow some artists and run.';
+      feedList.appendChild(empty);
+      return;
+    }
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'follows-row';
+
+      const info = document.createElement('div');
+      info.className = 'follows-info';
+
+      const title = document.createElement('span');
+      title.className = 'follows-name';
+      title.textContent = (item.artist || '') + ' – ' + (item.title || '');
+      info.appendChild(title);
+
+      const meta = document.createElement('span');
+      meta.className = 'follows-dis';
+      const metaParts = [];
+      if (item.release_date) metaParts.push(item.release_date);
+      if (item.primary_type) metaParts.push(item.primary_type);
+      meta.textContent = metaParts.join(' · ');
+      info.appendChild(meta);
+
+      row.appendChild(info);
+
+      const chip = document.createElement('span');
+      chip.className = 'chip feed-chip' + (item.status === 'acquired' ? ' chip-acquired' : ' chip-unavail');
+      chip.textContent = item.status || '';
+      row.appendChild(chip);
+
+      feedList.appendChild(row);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // 4. SETTINGS section
+  // ═══════════════════════════════════════════════════════
+  const settingsSec = makeSection('Settings');
+  el.appendChild(settingsSec);
+
+  // Load current follow state to pre-fill
+  let followState = {};
+  try {
+    const d = await API('/follow');
+    followState = d.state || {};
+  } catch(e) { /* ignore */ }
+
+  function makeSettingRow(labelText, inputEl) {
+    const row = document.createElement('div');
+    row.className = 'srow';
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    row.appendChild(label);
+    row.appendChild(inputEl);
+    return row;
+  }
+
+  const settingsRows = document.createElement('div');
+  settingsRows.style.borderTop = '1px solid var(--line)';
+  settingsRows.style.paddingTop = '4px';
+
+  // run_hour
+  const runHourInput = document.createElement('input');
+  runHourInput.type = 'number';
+  runHourInput.min = '0';
+  runHourInput.max = '23';
+  runHourInput.value = '4';
+  runHourInput.style.cssText = 'background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-family:JetBrains Mono,monospace;font-size:.7rem;padding:8px;border-radius:3px;width:80px;text-align:right';
+  settingsRows.appendChild(makeSettingRow('run hour (0–23)', runHourInput));
+
+  // lookback_days
+  const lookbackInput = document.createElement('input');
+  lookbackInput.type = 'number';
+  lookbackInput.min = '1';
+  lookbackInput.value = '7';
+  lookbackInput.style.cssText = runHourInput.style.cssText;
+  settingsRows.appendChild(makeSettingRow('lookback days', lookbackInput));
+
+  // default_backfill_days
+  const backfillInput = document.createElement('input');
+  backfillInput.type = 'number';
+  backfillInput.min = '0';
+  backfillInput.value = '30';
+  backfillInput.style.cssText = runHourInput.style.cssText;
+  settingsRows.appendChild(makeSettingRow('backfill days', backfillInput));
+
+  // playlist_cap
+  const capInput = document.createElement('input');
+  capInput.type = 'number';
+  capInput.min = '1';
+  capInput.value = '100';
+  capInput.style.cssText = runHourInput.style.cssText;
+  settingsRows.appendChild(makeSettingRow('playlist cap', capInput));
+
+  // webhook_url
+  const webhookInput = document.createElement('input');
+  webhookInput.type = 'text';
+  webhookInput.placeholder = 'https://…';
+  webhookInput.style.cssText = 'background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-family:JetBrains Mono,monospace;font-size:.7rem;padding:8px;border-radius:3px;width:140px;text-align:right';
+  settingsRows.appendChild(makeSettingRow('webhook URL', webhookInput));
+
+  // ntfy_topic
+  const ntfyInput = document.createElement('input');
+  ntfyInput.type = 'text';
+  ntfyInput.placeholder = 'my-topic';
+  ntfyInput.style.cssText = webhookInput.style.cssText;
+  settingsRows.appendChild(makeSettingRow('ntfy topic', ntfyInput));
+
+  settingsSec.appendChild(settingsRows);
+
+  // Load current settings from /follow
+  async function loadSettings() {
+    try {
+      const d = await API('/follow');
+      // /follow doesn't return settings — we rely on defaults already shown
+      // next_run is in d.state
+      const st = d.state || {};
+      if (st.next_run) {
+        const nextRunInfo = document.createElement('div');
+        nextRunInfo.className = 'warn';
+        nextRunInfo.style.marginTop = '8px';
+        nextRunInfo.textContent = 'next run: ' + st.next_run.slice(0, 16).replace('T', ' ');
+        settingsRows.appendChild(nextRunInfo);
+      }
+    } catch(e) { /* ignore */ }
+  }
+  loadSettings();
+
+  const settingsStatus = makeStatus();
+  settingsSec.appendChild(settingsStatus);
+
+  const saveSettingsBtn = document.createElement('button');
+  saveSettingsBtn.className = 'btn ghost';
+  saveSettingsBtn.style.marginTop = '8px';
+  saveSettingsBtn.textContent = 'save settings';
+  saveSettingsBtn.onclick = async () => {
+    saveSettingsBtn.disabled = true;
+    showStatus(settingsStatus, 'Saving…');
+    const body = {
+      run_hour: parseInt(runHourInput.value, 10) || 4,
+      lookback_days: parseInt(lookbackInput.value, 10) || 7,
+      default_backfill_days: parseInt(backfillInput.value, 10) || 30,
+      playlist_cap: parseInt(capInput.value, 10) || 100,
+      notify: {
+        webhook_url: webhookInput.value.trim(),
+        ntfy_topic: ntfyInput.value.trim(),
+      },
+    };
+    try {
+      await API('/follow/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      showStatus(settingsStatus, 'Saved.');
+    } catch(e) {
+      showStatus(settingsStatus, 'Save failed: ' + (e.message || 'unknown'));
+    } finally {
+      saveSettingsBtn.disabled = false;
+    }
+  };
+  settingsSec.appendChild(saveSettingsBtn);
+
+  // ═══════════════════════════════════════════════════════
+  // Initial data load
+  // ═══════════════════════════════════════════════════════
+  loadFollowedList();
+
+  // Mark feed as seen and load it
+  try { await API('/follow/feed/seen', {method: 'POST'}); } catch(e) { /* ignore */ }
+  updateFollowsBadge(0);
+  loadFeed();
+}
+
+async function initFollowsBadge() {
+  try {
+    const d = await API('/follow');
+    const count = (d.state || {}).unseen_count || 0;
+    updateFollowsBadge(count);
+  } catch(e) { /* ignore */ }
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1229,6 +1677,7 @@ document.addEventListener('DOMContentLoaded', () => {
   screens['mixes']   = {el: document.getElementById('s-mixes'),   render: renderMixes};
   screens['library'] = {el: document.getElementById('s-library'), render: renderLibrary};
   screens['search']  = {el: document.getElementById('s-search'),  render: renderSearch};
+  screens['follows'] = {el: document.getElementById('s-follows'), render: renderFollows};
   screens['setup']   = {el: document.getElementById('s-setup'),   render: renderSetup};
 
   // Clock
@@ -1244,6 +1693,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('nav button').forEach(b => {
     b.onclick = () => show(b.id.replace('nav-', ''));
   });
+
+  // Follows badge — fetch unseen count on init
+  initFollowsBadge();
 
   // Initial screen
   const initial = location.hash.slice(1);
