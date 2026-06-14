@@ -150,3 +150,49 @@ def test_genre_evolution_single_timestamp(tmp_path):
     assert ev["genres"] == ["techno"]
     assert len(ev["buckets"]) == 1
     assert ev["data"]["techno"] == [0.0]
+
+
+def test_top_entities_artists_and_tracks(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed(conn, [(1700000000, "A", "t1"), (1700000001, "A", "t1"),
+                 (1700000002, "B", "t2")])
+    arts = analytics.top_entities(conn, "artist", period="all", tz_offset_min=0,
+                                  now_ts=NOW, limit=10)
+    assert arts[0] == {"name": "A", "plays": 2}
+    tracks = analytics.top_entities(conn, "track", period="all", tz_offset_min=0,
+                                    now_ts=NOW, limit=10)
+    assert tracks[0]["artist"] == "A" and tracks[0]["track"] == "t1"
+    assert tracks[0]["plays"] == 2
+
+
+def test_new_vs_repeat(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed(conn, [(1700000000, "A", "t1"), (1700000001, "A", "t1"),
+                 (1700000002, "B", "t2")])
+    nvr = analytics.new_vs_repeat(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert nvr == {"first": 2, "repeat": 1}
+
+
+def test_discovery_rate_buckets_first_seen_artists(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed(conn, [(1700000000, "A", "t1"), (1700000001, "A", "t2"),
+                 (1700000002, "B", "t3")])
+    dr = analytics.discovery_rate(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert dr == [{"date": "2023-11-14", "new_artists": 2}]
+
+
+def test_overview_summary(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(
+        conn,
+        [(1700000000, "A", "t1"), (1700000001, "A", "t1"), (1700000002, "B", "t2")],
+        {"A": "techno", "B": "house"},
+    )
+    ov = analytics.overview(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert ov["total_scrobbles"] == 3
+    assert ov["unique_artists"] == 2
+    assert ov["unique_tracks"] == 2
+    assert ov["top_genre"] == "techno"
+    assert ov["first_ts"] == 1700000000
+    assert ov["last_ts"] == 1700000002
+    assert ov["est_listening_seconds"] == 3 * analytics.AVG_TRACK_SECONDS

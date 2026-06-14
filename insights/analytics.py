@@ -241,3 +241,93 @@ def _iso_day(ts, tz_offset_min):
     import datetime as _dt
     local = ts + _offset_seconds(tz_offset_min)
     return _dt.datetime.fromtimestamp(local, tz=_dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+# Rough constant for "estimated listening time" — we do not store track
+# durations, so a play counts as this many seconds. Labelled "estimated" in UI.
+AVG_TRACK_SECONDS = 210
+
+
+def top_entities(conn, kind, period="all", tz_offset_min=0, now_ts=None, limit=20):
+    """Most-played artists | tracks | albums in the period.
+
+    kind == "artist" -> [{"name", "plays"}]
+    kind == "track"  -> [{"artist", "track", "plays"}]
+    kind == "album"  -> [{"album", "plays"}]
+    """
+    where, params = _period_where(period, now_ts)
+    clause = _and(where)
+    if kind == "artist":
+        rows = conn.execute(
+            f"SELECT artist AS name, COUNT(*) AS n FROM scrobbles {clause} "
+            f"GROUP BY artist ORDER BY n DESC LIMIT ?", params + [limit]).fetchall()
+        return [{"name": r["name"], "plays": r["n"]} for r in rows]
+    if kind == "track":
+        rows = conn.execute(
+            f"SELECT artist, track, COUNT(*) AS n FROM scrobbles {clause} "
+            f"GROUP BY artist, track ORDER BY n DESC LIMIT ?", params + [limit]).fetchall()
+        return [{"artist": r["artist"], "track": r["track"], "plays": r["n"]} for r in rows]
+    if kind == "album":
+        album_clause = _and(where) or "WHERE 1=1"
+        rows = conn.execute(
+            f"SELECT album, COUNT(*) AS n FROM scrobbles {album_clause} "
+            f"AND album IS NOT NULL GROUP BY album ORDER BY n DESC LIMIT ?",
+            params + [limit]).fetchall()
+        return [{"album": r["album"], "plays": r["n"]} for r in rows]
+    raise ValueError(f"unknown entity kind: {kind!r}")
+
+
+def new_vs_repeat(conn, period="all", tz_offset_min=0, now_ts=None):
+    """In-period plays split into first-ever listens vs repeats.
+
+    A play is "first" if its ts is the earliest ts for that (artist, track)
+    across the WHOLE history.
+    """
+    where, params = _period_where(period, now_ts)
+    clause = _and(where)
+    first = conn.execute(
+        "WITH firsts AS (SELECT artist, track, MIN(ts) AS fts FROM scrobbles "
+        "GROUP BY artist, track) "
+        f"SELECT COUNT(*) FROM scrobbles s JOIN firsts f "
+        "ON f.artist = s.artist AND f.track = s.track AND f.fts = s.ts "
+        + (f"WHERE s.{where}" if where else ""), params).fetchone()[0]
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM scrobbles {clause}", params).fetchone()[0]
+    return {"first": first, "repeat": total - first}
+
+
+def discovery_rate(conn, period="all", tz_offset_min=0, now_ts=None):
+    """New (first-seen) artists per local calendar day, within the period.
+
+    Returns [{"date": "YYYY-MM-DD", "new_artists": n}] ordered by date.
+    """
+    where, params = _period_where(period, now_ts)
+    first_filter = f"WHERE fts >= ?" if where else ""
+    fparams = [params[0]] if where else []
+    rows = conn.execute(
+        "WITH firsts AS (SELECT artist, MIN(ts) AS fts FROM scrobbles GROUP BY artist) "
+        f"SELECT strftime('%Y-%m-%d', fts + {_offset_seconds(tz_offset_min)}, 'unixepoch') "
+        f"AS d, COUNT(*) AS n FROM firsts {first_filter} GROUP BY d ORDER BY d",
+        fparams,
+    ).fetchall()
+    return [{"date": r["d"], "new_artists": r["n"]} for r in rows]
+
+
+def overview(conn, period="all", tz_offset_min=0, now_ts=None):
+    """Summary scalars for the period."""
+    where, params = _period_where(period, now_ts)
+    clause = _and(where)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS total, COUNT(DISTINCT artist) AS artists, "
+        f"COUNT(DISTINCT artist || char(31) || track) AS tracks, "
+        f"MIN(ts) AS lo, MAX(ts) AS hi FROM scrobbles {clause}", params).fetchone()
+    tg = top_genres(conn, period=period, tz_offset_min=tz_offset_min, now_ts=now_ts, limit=1)
+    return {
+        "total_scrobbles": row["total"],
+        "unique_artists": row["artists"],
+        "unique_tracks": row["tracks"],
+        "first_ts": row["lo"],
+        "last_ts": row["hi"],
+        "top_genre": tg[0]["genre"] if tg else None,
+        "est_listening_seconds": row["total"] * AVG_TRACK_SECONDS,
+    }
