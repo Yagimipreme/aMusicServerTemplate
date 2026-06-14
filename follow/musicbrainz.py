@@ -24,6 +24,12 @@ class MBTimeout(MBError):
     pass
 
 
+def _escape_lucene(value: str) -> str:
+    """Escape backslash then double-quote so a value is safe inside a Lucene
+    field:"..." query (e.g. names like AC\\DC or Say "Hi")."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 class MusicBrainzClient:
     def __init__(self, session=None, min_interval: float = 1.0):
         self._session = session or requests.Session()
@@ -55,8 +61,8 @@ class MusicBrainzClient:
             raise MBTimeout(f"MusicBrainz network error: {exc}") from exc
 
     def search_artist(self, name: str, limit: int = 5) -> list:
-        escaped = name.replace("\\", "\\\\").replace('"', '\\"')
-        data = self._get("artist", {"query": f'artist:"{escaped}"', "limit": limit})
+        data = self._get("artist",
+                         {"query": f'artist:"{_escape_lucene(name)}"', "limit": limit})
         out = []
         for a in data.get("artists", []) or []:
             out.append({
@@ -95,7 +101,8 @@ class MusicBrainzClient:
 
     def search_recording(self, artist: str, title: str, limit: int = 5) -> list:
         data = self._get("recording", {
-            "query": f'artist:"{artist}" AND recording:"{title}"',
+            "query": f'artist:"{_escape_lucene(artist)}" '
+                     f'AND recording:"{_escape_lucene(title)}"',
             "limit": limit,
         })
         out = []

@@ -117,3 +117,13 @@ def test_search_recording_parses():
 def test_search_recording_empty_when_no_recordings():
     client = mb.MusicBrainzClient(session=FakeSession([{"recordings": []}]), min_interval=0)
     assert client.search_recording("X", "Y") == []
+
+
+def test_search_recording_escapes_lucene_specials():
+    sess = FakeSession([{"recordings": []}])
+    client = mb.MusicBrainzClient(session=sess, min_interval=0)
+    artist, title = 'AC\\DC', 'Say "Hi"'
+    client.search_recording(artist, title)
+    _, params = sess.calls[0]
+    esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')
+    assert params["query"] == f'artist:"{esc(artist)}" AND recording:"{esc(title)}"'
