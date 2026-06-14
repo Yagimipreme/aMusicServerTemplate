@@ -137,3 +137,16 @@ def test_genre_evolution_buckets(tmp_path):
     assert "techno" in ev["genres"]
     assert len(ev["buckets"]) == len(ev["data"]["techno"])
     assert len(ev["buckets"]) >= 1
+    # The two plays are ~60 days apart → first lands in the first bucket,
+    # most-recent in the last bucket.
+    assert ev["data"]["techno"][0] > 0
+    assert ev["data"]["techno"][-1] > 0
+
+
+def test_genre_evolution_single_timestamp(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(conn, [(1700000000, "A", "t1")], {"A": "techno"})
+    ev = analytics.genre_evolution(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert ev["genres"] == ["techno"]
+    assert len(ev["buckets"]) == 1
+    assert ev["data"]["techno"] == [0.0]

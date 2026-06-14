@@ -110,7 +110,7 @@ def plays_over_time(conn, period="all", tz_offset_min=0, now_ts=None):
     return [{"date": r["d"], "plays": r["n"]} for r in rows]
 
 
-_GENRE_JOIN = (
+_GENRE_BASE_SQL = (
     "FROM scrobbles s JOIN artist_tags a ON a.artist = s.artist "
     "WHERE a.primary_genre IS NOT NULL"
 )
@@ -119,14 +119,19 @@ _GENRE_JOIN = (
 def _genre_where(period, now_ts):
     """Genre-join WHERE clause + params (always filters NULL genre, plus period)."""
     frag, params = _period_where(period, now_ts)
-    where = _GENRE_JOIN
+    where = _GENRE_BASE_SQL
     if frag:
         where += f" AND s.{frag}"
     return where, params
 
 
 def top_genres(conn, period="all", tz_offset_min=0, now_ts=None, limit=15):
-    """Ranked genres with play share. [{"genre", "plays", "share"}]."""
+    """Ranked genres with play share.
+
+    `share` is each genre's fraction of plays WITHIN the returned top-N set
+    (not of all listening), so shares across the returned rows sum to 1.0.
+    Returns [{"genre", "plays", "share"}].
+    """
     where, params = _genre_where(period, now_ts)
     rows = conn.execute(
         f"SELECT a.primary_genre AS g, COUNT(*) AS n {where} "
@@ -204,7 +209,7 @@ def genre_evolution(conn, period="all", tz_offset_min=0, now_ts=None, top_n=6, b
     lo, hi = span["lo"], span["hi"]
     genres = _top_genre_names(conn, where, params, top_n)
     if not genres or hi == lo:
-        label = f"{_iso_day(lo, tz_offset_min)}"
+        label = _iso_day(lo, tz_offset_min)
         return {"buckets": [label], "genres": genres,
                 "data": {g: [0.0] for g in genres}}
 
@@ -235,4 +240,4 @@ def _iso_day(ts, tz_offset_min):
     """Local YYYY-MM-DD for a unix ts (helper for bucket labels)."""
     import datetime as _dt
     local = ts + _offset_seconds(tz_offset_min)
-    return _dt.datetime.utcfromtimestamp(local).strftime("%Y-%m-%d")
+    return _dt.datetime.fromtimestamp(local, tz=_dt.timezone.utc).strftime("%Y-%m-%d")
