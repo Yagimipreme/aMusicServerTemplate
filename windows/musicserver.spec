@@ -21,6 +21,7 @@ ROOT = HERE.parent                   # repo root
 # can find them via their relative path conventions (APP_ROOT/sWebExt/... etc).
 datas = [
     (str(ROOT / "sWebExt"),             "sWebExt"),
+    (str(ROOT / "web"),                 "web"),
     (str(ROOT / "scripts"),             "scripts"),
     (str(ROOT / "config.example.json"), "."),
     (str(ROOT / "ffmpeg.exe"),          "."),
@@ -36,6 +37,17 @@ hiddenimports = (
     collect_submodules("yt_dlp")
     + collect_submodules("eyed3")
     + collect_submodules("selenium")
+    # First-party packages — several are imported lazily inside functions in
+    # server.py (e.g. `from insights import db`), so list them explicitly so
+    # PyInstaller's static analysis can't miss a deferred import.
+    + collect_submodules("insights")
+    + collect_submodules("discover")
+    + collect_submodules("lastfm")
+    + collect_submodules("library")
+    + collect_submodules("follow")
+    + collect_submodules("share")
+    + collect_submodules("soundcloud")
+    + collect_submodules("spotify")
     + ["winreg", "PIL.Image", "pystray._win32"]
 )
 
@@ -51,7 +63,11 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "pytest", "IPython"],
+    # librosa + its analysis stack are an optional local-feature extra and are
+    # never bundled — insights uses AcousticBrainz in the exe. Excluded so a
+    # build host that happens to have them installed can't bloat the binary.
+    excludes=["tkinter", "matplotlib", "pytest", "IPython",
+              "librosa", "numba", "llvmlite", "scipy", "sklearn", "scikit_learn"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
