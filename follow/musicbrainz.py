@@ -92,3 +92,38 @@ class MusicBrainzClient:
                 if track.get("title"):
                     titles.append(track["title"])
         return titles
+
+    def search_recording(self, artist: str, title: str, limit: int = 5) -> list:
+        data = self._get("recording", {
+            "query": f'artist:"{artist}" AND recording:"{title}"',
+            "limit": limit,
+        })
+        out = []
+        for r in data.get("recordings", []) or []:
+            credits = r.get("artist-credit", []) or []
+            artist_mbid = ""
+            artist_name = ""
+            if credits:
+                a = credits[0].get("artist", {}) or {}
+                artist_mbid = a.get("id", "") or ""
+                artist_name = credits[0].get("name", "") or a.get("name", "") or ""
+            releases = []
+            for rel in r.get("releases", []) or []:
+                rg = rel.get("release-group", {}) or {}
+                releases.append({
+                    "mbid": rel.get("id", "") or "",
+                    "title": rel.get("title", "") or "",
+                    "date": rel.get("date", "") or "",
+                    "rg_mbid": rg.get("id", "") or "",
+                    "primary_type": rg.get("primary-type", "") or "",
+                    "status": rel.get("status", "") or "",
+                })
+            out.append({
+                "mbid": r.get("id", "") or "",
+                "score": r.get("score", 0) or 0,
+                "title": r.get("title", "") or "",
+                "artist_mbid": artist_mbid,
+                "artist_name": artist_name,
+                "releases": releases,
+            })
+        return out
