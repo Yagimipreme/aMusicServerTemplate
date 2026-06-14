@@ -38,8 +38,6 @@ def analyze_file(path: str) -> "dict | None":
     except ImportError:
         logger.warning("localfeatures: librosa not installed; skipping local analysis")
         return None
-    if librosa is None:  # explicit test/patch for "not installed"
-        return None
     try:
         y, sr = librosa.load(path, mono=True, duration=120)
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
