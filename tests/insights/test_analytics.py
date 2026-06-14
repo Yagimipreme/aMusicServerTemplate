@@ -62,3 +62,13 @@ def test_plays_over_time_daily_buckets(tmp_path):
     _seed(conn, [(1700000000, "A", "t1"), (1700003600, "A", "t2")])
     pot = analytics.plays_over_time(conn, period="all", tz_offset_min=0, now_ts=NOW)
     assert pot == [{"date": "2023-11-14", "plays": 2}]
+
+
+def test_hour_day_heatmap_tz_crosses_midnight(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    # 1700003600 = 2023-11-14 23:13:20 UTC = Tuesday (dow 2), hour 23.
+    # With +60 min it becomes 2023-11-15 00:13 = Wednesday (dow 3), hour 0.
+    _seed(conn, [(1700003600, "A", "t1")])
+    hm = analytics.hour_day_heatmap(conn, period="all", tz_offset_min=60, now_ts=NOW)
+    assert hm["matrix"][3][0] == 1   # Wednesday, hour 0 (local)
+    assert hm["matrix"][2][23] == 0  # NOT Tuesday hour 23 anymore
