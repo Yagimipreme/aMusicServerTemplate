@@ -629,7 +629,7 @@ def _run_insights_sync_once(max_pages=None) -> dict:
 
 def _mb_recording_search(artist, track):
     """Resolve a recording MBID via MusicBrainz (mirrors library/repair.py)."""
-    import urllib.parse, urllib.request, json as _json
+    import urllib.parse, urllib.request
     q = urllib.parse.quote(f'recording:"{track}" AND artist:"{artist}"')
     url = f"https://musicbrainz.org/ws/2/recording/?query={q}&limit=1&fmt=json"
     req = urllib.request.Request(url, headers={"User-Agent":
@@ -637,8 +637,14 @@ def _mb_recording_search(artist, track):
     try:
         time.sleep(1.0)  # MusicBrainz 1 req/s ToS
         with urllib.request.urlopen(req, timeout=10) as r:
-            recs = _json.loads(r.read()).get("recordings", [])
-        return recs[0]["id"] if recs else None
+            recs = json.loads(r.read()).get("recordings", [])
+        if not recs:
+            return None
+        # Reject low-confidence matches (MusicBrainz score 0-100); a wrong MBID
+        # would cache features for the wrong recording and never self-correct.
+        if int(recs[0].get("score", 0)) < 80:
+            return None
+        return recs[0]["id"]
     except Exception:
         logger.warning("[INSIGHTS] MB recording search failed for %s / %s", artist, track)
         return None
@@ -1206,7 +1212,10 @@ def insights_genres():
 @app.route("/insights/features/sync", methods=["POST"])
 def insights_features_sync():
     body = request.get_json(force=True, silent=True) or {}
-    max_tracks = body.get("max_tracks", 200)
+    try:
+        max_tracks = int(body.get("max_tracks", 200))
+    except (TypeError, ValueError):
+        max_tracks = 200
     t = threading.Thread(target=_run_insights_features_once,
                          kwargs={"max_tracks": max_tracks}, daemon=True)
     t.start()
