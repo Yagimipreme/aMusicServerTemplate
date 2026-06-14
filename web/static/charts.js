@@ -3,7 +3,6 @@
 // Colors come from CSS custom properties so charts track the SIGNAL theme.
 const NS = 'http://www.w3.org/2000/svg';
 const ACID = 'var(--acid)';
-const LINE = 'var(--line)';
 const MUT = 'var(--mut)';
 
 function _svgEl(tag, attrs) {
@@ -28,6 +27,7 @@ function _text(x, y, str, opts = {}) {
 
 // Vertical bar chart. values: number[]; labels: string[] (sparse ok via labelEvery).
 function barChart(values, labels, opts = {}) {
+  if (!values.length) return svg(320, 120);
   const w = 320, h = 120, pad = 16, bw = (w - pad * 2) / values.length;
   const max = Math.max(1, ...values);
   const s = svg(w, h);
@@ -93,6 +93,7 @@ function heatmap(matrix, rowLabels) {
 function lineChart(points, opts = {}) {
   const w = 320, h = 110, pad = 16;
   const vals = points.filter(v => v != null);
+  if (!vals.length) return svg(w, h);
   const max = Math.max(1, ...vals), min = opts.min != null ? opts.min : 0;
   const n = points.length;
   const x = i => pad + (w - pad * 2) * (n === 1 ? 0.5 : i / (n - 1));
@@ -106,6 +107,10 @@ function lineChart(points, opts = {}) {
   });
   s.appendChild(_svgEl('path', {d: d.trim(), fill: 'none', stroke: ACID,
     'stroke-width': 2, 'stroke-linejoin': 'round'}));
+  if (vals.length === 1) {
+    const i = points.findIndex(v => v != null);
+    s.appendChild(_svgEl('circle', {cx: x(i), cy: y(points[i]), r: 3, fill: ACID}));
+  }
   if (opts.labels) {
     const every = Math.ceil(opts.labels.length / 6);
     opts.labels.forEach((lab, i) => {
@@ -125,12 +130,18 @@ function donut(segments, opts = {}) {
   let a0 = -Math.PI / 2;
   segments.forEach((d, i) => {
     const frac = d.value / total, a1 = a0 + frac * 2 * Math.PI;
+    const color = palette[i % palette.length];
+    if (frac >= 1) {
+      s.appendChild(_svgEl('circle', {cx, cy, r, fill: 'none',
+        stroke: color, 'stroke-width': sw}));
+      a0 = a1; return;
+    }
     const large = frac > 0.5 ? 1 : 0;
     const p = (a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
     const [x0, y0] = p(a0), [x1, y1] = p(a1);
     s.appendChild(_svgEl('path', {
       d: `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`,
-      fill: 'none', stroke: palette[i % palette.length], 'stroke-width': sw}));
+      fill: 'none', stroke: color, 'stroke-width': sw}));
     a0 = a1;
   });
   return s;
