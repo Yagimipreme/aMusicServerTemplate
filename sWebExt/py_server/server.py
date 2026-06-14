@@ -598,6 +598,11 @@ def _run_insights_sync_once(max_pages=None) -> dict:
         conn = insights_db.connect(_insights_db_path())
         try:
             synced = sync_scrobbles(lfm, username, conn, max_pages=max_pages)
+            from insights.genres import ensure_artist_tags
+            artists = [r[0] for r in conn.execute(
+                "SELECT DISTINCT artist FROM scrobbles").fetchall()]
+            tagged = ensure_artist_tags(lfm, conn, artists)
+            synced["artists_tagged"] = tagged
         finally:
             conn.close()
         result = {"status": "ok", **synced}
@@ -1059,6 +1064,58 @@ def insights_sync():
 @app.route("/insights/sync/status", methods=["GET"])
 def insights_sync_status():
     return jsonify(_insights_last_result)
+
+
+def _insights_query_args():
+    period = request.args.get("period", "all")
+    try:
+        tz = int(request.args.get("tz", 0))
+    except (TypeError, ValueError):
+        tz = 0
+    return period, tz
+
+
+@app.route("/insights/overview", methods=["GET"])
+def insights_overview():
+    from insights import db as insights_db, analytics
+    period, tz = _insights_query_args()
+    conn = insights_db.connect(_insights_db_path())
+    try:
+        return jsonify(analytics.overview(conn, period=period, tz_offset_min=tz))
+    finally:
+        conn.close()
+
+
+@app.route("/insights/temporal", methods=["GET"])
+def insights_temporal():
+    from insights import db as insights_db, analytics
+    period, tz = _insights_query_args()
+    conn = insights_db.connect(_insights_db_path())
+    try:
+        return jsonify({
+            "clock": analytics.listening_clock(conn, period=period, tz_offset_min=tz),
+            "heatmap": analytics.hour_day_heatmap(conn, period=period, tz_offset_min=tz),
+            "weekday_weekend": analytics.weekday_weekend(conn, period=period, tz_offset_min=tz),
+            "over_time": analytics.plays_over_time(conn, period=period, tz_offset_min=tz),
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/insights/genres", methods=["GET"])
+def insights_genres():
+    from insights import db as insights_db, analytics
+    period, tz = _insights_query_args()
+    conn = insights_db.connect(_insights_db_path())
+    try:
+        return jsonify({
+            "top": analytics.top_genres(conn, period=period, tz_offset_min=tz),
+            "by_hour": analytics.genre_by_hour(conn, period=period, tz_offset_min=tz),
+            "evolution": analytics.genre_evolution(conn, period=period, tz_offset_min=tz),
+            "diversity": analytics.genre_diversity(conn, period=period, tz_offset_min=tz),
+        })
+    finally:
+        conn.close()
 
 
 @app.route("/library/repair", methods=["POST"])

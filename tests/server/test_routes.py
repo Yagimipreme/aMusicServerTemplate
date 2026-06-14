@@ -881,3 +881,54 @@ def test_post_suffixes_non_list_returns_400(client, tmp_path):
          patch("sWebExt.py_server.server._PROJECT_ROOT", str(tmp_path)):
         resp = client.post("/library/suffixes", json={"suffixes": "not-a-list"})
     assert resp.status_code == 400
+
+
+# ── Insights analytics routes ─────────────────────────────────────────────────
+
+def _seed_insights_db(path):
+    from insights import db as idb
+    conn = idb.connect(path)
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track) VALUES (?, ?, ?)",
+        [(1700000000, "A", "t1"), (1700000001, "A", "t1"), (1700000002, "B", "t2")])
+    conn.execute("INSERT INTO artist_tags (artist, tags_json, primary_genre, fetched_at) "
+                 "VALUES ('A', '[]', 'techno', 1)")
+    conn.commit()
+    conn.close()
+
+
+def test_insights_overview_endpoint(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as server
+    dbp = str(tmp_path / "i.db")
+    _seed_insights_db(dbp)
+    monkeypatch.setattr(server, "_insights_db_path", lambda: dbp)
+    resp = client.get("/insights/overview?period=all&tz=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["total_scrobbles"] == 3
+    assert body["top_genre"] == "techno"
+
+
+def test_insights_temporal_endpoint(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as server
+    dbp = str(tmp_path / "i.db")
+    _seed_insights_db(dbp)
+    monkeypatch.setattr(server, "_insights_db_path", lambda: dbp)
+    resp = client.get("/insights/temporal?tz=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body["clock"]["hours"]) == 24
+    assert len(body["heatmap"]["matrix"]) == 7
+    assert "weekday_weekend" in body and "over_time" in body
+
+
+def test_insights_genres_endpoint(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as server
+    dbp = str(tmp_path / "i.db")
+    _seed_insights_db(dbp)
+    monkeypatch.setattr(server, "_insights_db_path", lambda: dbp)
+    resp = client.get("/insights/genres?tz=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["top"][0]["genre"] == "techno"
+    assert "by_hour" in body and "evolution" in body and "diversity" in body
