@@ -15,7 +15,7 @@ _BASE = "https://acousticbrainz.org/api/v1"
 _TIMEOUT = 10
 
 
-def _primary_mood(highlevel: dict):
+def _primary_mood(highlevel: dict) -> "str | None":
     """Return the strongest positive mood label (e.g. 'happy'), or None.
 
     AcousticBrainz exposes mood_* binary classifiers; we pick the classifier
@@ -26,7 +26,7 @@ def _primary_mood(highlevel: dict):
         if not key.startswith("mood_"):
             continue
         value = clf.get("value") or ""
-        prob = clf.get("probability") or 0.0
+        prob = clf.get("probability", 0.0)
         if value and not value.startswith("not") and prob > best_p:
             best_p, best = prob, key[len("mood_"):]
     return best
@@ -43,7 +43,13 @@ def fetch_features(mbid: str, session=None) -> "dict | None":
         ll.raise_for_status()
         low = ll.json()
         hl = http.get(f"{_BASE}/{mbid}/high-level", timeout=_TIMEOUT)
-        high = hl.json() if hl.status_code == 200 else {}
+        if hl.status_code == 200:
+            high = hl.json()
+        else:
+            if hl.status_code != 404:
+                logger.warning("acousticbrainz: high-level returned %s for %s; "
+                               "keeping low-level only", hl.status_code, mbid)
+            high = {}
     except Exception:
         logger.warning("acousticbrainz: fetch failed for %s", mbid, exc_info=True)
         return None

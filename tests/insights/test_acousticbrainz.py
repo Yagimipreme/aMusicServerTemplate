@@ -48,3 +48,19 @@ def test_primary_mood_ignores_negatives():
     hl = {"mood_aggressive": {"value": "not aggressive", "probability": 0.95},
           "mood_relaxed": {"value": "relaxed", "probability": 0.6}}
     assert ab._primary_mood(hl) == "relaxed"
+
+
+def test_fetch_features_no_highlevel_keeps_lowlevel():
+    session = MagicMock()
+    # low-level present, high-level 404 (genuinely absent) → keep bpm/key, mood None
+    session.get.side_effect = [_resp(200, _LOWLEVEL), _resp(404, {"message": "n/a"})]
+    feat = ab.fetch_features("mbid-2", session=session)
+    assert feat["bpm"] == 128.4
+    assert feat["mood"] is None
+    assert feat["mood_scores"] is None
+
+
+def test_primary_mood_all_negative_returns_none():
+    hl = {"mood_happy": {"value": "not happy", "probability": 0.9},
+          "mood_sad": {"value": "not sad", "probability": 0.8}}
+    assert ab._primary_mood(hl) is None
