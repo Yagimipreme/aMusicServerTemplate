@@ -81,6 +81,11 @@ _repair_last_result: dict = {"status": "idle"}
 _insights_running = threading.Lock()
 _insights_last_result: dict = {"status": "idle"}
 
+# ── Insights feature-sync state ────────────────────────────────────────────────
+
+_insights_features_running = threading.Lock()
+_insights_features_last_result: dict = {"status": "idle"}
+
 # ── Discover run state ────────────────────────────────────────────────────────
 
 _discover_running = threading.Lock()
@@ -622,6 +627,81 @@ def _run_insights_sync_once(max_pages=None) -> dict:
         _insights_running.release()
 
 
+def _mb_recording_search(artist, track):
+    """Resolve a recording MBID via MusicBrainz (mirrors library/repair.py)."""
+    import urllib.parse, urllib.request, json as _json
+    q = urllib.parse.quote(f'recording:"{track}" AND artist:"{artist}"')
+    url = f"https://musicbrainz.org/ws/2/recording/?query={q}&limit=1&fmt=json"
+    req = urllib.request.Request(url, headers={"User-Agent":
+        "aMusicServer/1.0 (insights features)"})
+    try:
+        time.sleep(1.0)  # MusicBrainz 1 req/s ToS
+        with urllib.request.urlopen(req, timeout=10) as r:
+            recs = _json.loads(r.read()).get("recordings", [])
+        return recs[0]["id"] if recs else None
+    except Exception:
+        logger.warning("[INSIGHTS] MB recording search failed for %s / %s", artist, track)
+        return None
+
+
+def _build_track_path_index(song_dir):
+    """Map (artist_lower, title_lower) -> file path using the library scanner."""
+    try:
+        from library.scanner import scan
+        idx = {}
+        for rec in scan(song_dir):
+            a = (rec.get("artist") or "").lower()
+            t = (rec.get("title") or "").lower()
+            if a and t:
+                idx[(a, t)] = rec["path"]
+        return idx
+    except Exception:
+        logger.warning("[INSIGHTS] could not build track path index", exc_info=True)
+        return {}
+
+
+def _run_insights_features_once(max_tracks=200) -> dict:
+    """Compute audio features for tracks lacking them (bounded per run)."""
+    global _insights_features_last_result
+    if not _insights_features_running.acquire(blocking=False):
+        return {"status": "skipped", "reason": "already running"}
+    try:
+        from discover.config import load_config
+        from insights import db as insights_db
+        from insights.features import ensure_track_features
+        from insights.acousticbrainz import fetch_features
+        cfg = load_config(_CONFIG_PATH)
+        enable_local = bool((cfg.get("insights") or {}).get("enable_local_analysis", False))
+        local_analyze = None
+        if enable_local:
+            from insights.localfeatures import analyze_file
+            song_dir = cfg.get("song_dir", "")
+            index = _build_track_path_index(song_dir) if song_dir else {}
+
+            def local_analyze(artist, track, _idx=index):
+                path = _idx.get((artist.lower(), track.lower()))
+                return analyze_file(path) if path else None
+
+        conn = insights_db.connect(_insights_db_path())
+        try:
+            n = ensure_track_features(
+                conn, ab_fetch=fetch_features, mb_search=_mb_recording_search,
+                local_analyze=local_analyze, limit=max_tracks)
+        finally:
+            conn.close()
+        result = {"status": "ok", "processed": n}
+        logger.info("[INSIGHTS] feature sync complete: %s", result)
+        _insights_features_last_result = result
+        return result
+    except Exception as e:
+        logger.exception("[INSIGHTS] feature sync failed")
+        result = {"status": "error", "error": str(e)}
+        _insights_features_last_result = result
+        return result
+    finally:
+        _insights_features_running.release()
+
+
 def _run_repair_once(limit=None) -> dict:
     global _repair_last_result
     if not _repair_running.acquire(blocking=False):
@@ -956,6 +1036,7 @@ SETTINGS_SCHEMA = [
     {"path": "dedup.interval_hours",         "type": "int",       "label": "Dedup interval (hours)",    "group": "Maintenance", "min": 1, "max": 168},
     {"path": "dedup.auto_delete",            "type": "bool",      "label": "Dedup auto-delete",         "group": "Maintenance"},
     {"path": "title_cleanup.enabled",        "type": "bool",      "label": "Title cleanup enabled",     "group": "Maintenance"},
+    {"path": "insights.enable_local_analysis","type": "bool",      "label": "Local audio analysis (librosa)", "group": "Maintenance"},
     # Server group
     {"path": "hostname",                     "type": "str",       "label": "Server hostname",           "group": "Server"},
     {"path": "song_dir",                     "type": "str",       "label": "Song directory",            "group": "Server"},
@@ -1117,6 +1198,39 @@ def insights_genres():
             "by_hour": analytics.genre_by_hour(conn, period=period, tz_offset_min=tz),
             "evolution": analytics.genre_evolution(conn, period=period, tz_offset_min=tz),
             "diversity": analytics.genre_diversity(conn, period=period, tz_offset_min=tz),
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/insights/features/sync", methods=["POST"])
+def insights_features_sync():
+    body = request.get_json(force=True, silent=True) or {}
+    max_tracks = body.get("max_tracks", 200)
+    t = threading.Thread(target=_run_insights_features_once,
+                         kwargs={"max_tracks": max_tracks}, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/insights/features/sync/status", methods=["GET"])
+def insights_features_sync_status():
+    return jsonify(_insights_features_last_result)
+
+
+@app.route("/insights/features", methods=["GET"])
+def insights_features():
+    from insights import db as insights_db, analytics
+    period, tz = _insights_query_args()
+    conn = insights_db.connect(_insights_db_path())
+    try:
+        return jsonify({
+            "bpm_distribution": analytics.bpm_distribution(conn, period=period, tz_offset_min=tz),
+            "bpm_curve": analytics.bpm_curve(conn, period=period, tz_offset_min=tz),
+            "key_distribution": analytics.key_distribution(conn, period=period, tz_offset_min=tz),
+            "mood_distribution": analytics.mood_distribution(conn, period=period, tz_offset_min=tz),
+            "mood_by_time": analytics.mood_by_time(conn, period=period, tz_offset_min=tz),
+            "coverage": analytics.feature_coverage(conn, period=period, tz_offset_min=tz),
         })
     finally:
         conn.close()

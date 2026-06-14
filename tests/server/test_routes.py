@@ -17,6 +17,7 @@ def app():
         # Reset global state between test runs
         srv._enrich_last_result = {"status": "idle"}
         srv._insights_last_result = {"status": "idle"}
+        srv._insights_features_last_result = {"status": "idle"}
         flask_app = srv.app
         flask_app.config["TESTING"] = True
         yield flask_app
@@ -932,3 +933,51 @@ def test_insights_genres_endpoint(client, monkeypatch, tmp_path):
     body = resp.get_json()
     assert body["top"][0]["genre"] == "techno"
     assert "by_hour" in body and "evolution" in body and "diversity" in body
+
+
+# ── Insights features routes ──────────────────────────────────────────────────
+
+def _seed_features_db(path):
+    from insights import db as idb
+    conn = idb.connect(path)
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track) VALUES (?, ?, ?)",
+        [(1700000000, "A", "t1"), (1700000001, "A", "t1")])
+    conn.execute("INSERT INTO track_features (artist, track, bpm, key, scale, mood, source, analyzed_at) "
+                 "VALUES ('A','t1',128.0,'A','minor','happy','acousticbrainz',1)")
+    conn.commit(); conn.close()
+
+
+def test_insights_features_endpoint(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as server
+    dbp = str(tmp_path / "i.db"); _seed_features_db(dbp)
+    monkeypatch.setattr(server, "_insights_db_path", lambda: dbp)
+    resp = client.get("/insights/features?tz=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    for k in ("bpm_distribution", "bpm_curve", "key_distribution",
+              "mood_distribution", "mood_by_time", "coverage"):
+        assert k in body
+    assert body["bpm_curve"]["hours"][22] == 128.0
+
+
+def test_insights_features_sync_starts_worker(client, monkeypatch):
+    import sWebExt.py_server.server as server
+    called = {}
+    def fake(max_tracks=None):
+        called["ran"] = True; called["max"] = max_tracks; return {"status": "ok"}
+    class _Imm:
+        def __init__(self, target=None, kwargs=None, daemon=None, **_):
+            self._t = target; self._k = kwargs or {}
+        def start(self): self._t(**self._k)
+    monkeypatch.setattr(server, "_run_insights_features_once", fake)
+    monkeypatch.setattr(server.threading, "Thread", _Imm)
+    resp = client.post("/insights/features/sync", json={"max_tracks": 50})
+    assert resp.status_code == 200 and resp.get_json()["status"] == "started"
+    assert called.get("ran") and called.get("max") == 50
+
+
+def test_insights_features_sync_status_idle(client):
+    resp = client.get("/insights/features/sync/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] in ("idle", "ok", "started", "skipped", "disabled", "running")
