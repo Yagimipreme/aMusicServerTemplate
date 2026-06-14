@@ -66,3 +66,8 @@ def test_ensure_respects_limit(tmp_path):
     _seed(conn, [(1, "A", "t1", "m1"), (2, "B", "t2", "m2"), (3, "C", "t3", "m3")])
     n = features.ensure_track_features(conn, ab_fetch=lambda m: None, limit=2)
     assert n == 2
+
+
+def test_resolve_no_row_returns_none(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    assert features.resolve_recording_mbid(conn, "Nobody", "Nothing") is None

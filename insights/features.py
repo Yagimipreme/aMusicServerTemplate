@@ -51,7 +51,7 @@ def ensure_track_features(conn, *, ab_fetch, mb_search=None, local_analyze=None,
            "LEFT JOIN track_features f ON f.artist = s.artist AND f.track = s.track "
            "WHERE f.artist IS NULL")
     params = []
-    if limit:
+    if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
     todo = conn.execute(sql, params).fetchall()
