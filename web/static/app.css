@@ -132,3 +132,21 @@ nav button.on .ico{text-shadow:0 0 14px rgba(195,255,61,.7)}
 /* skeleton shimmer */
 .skeleton{background:linear-gradient(90deg,var(--panel) 25%,var(--panel2) 50%,var(--panel) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ── Insights screen ─────────────────────────────────────────────────────── */
+.ins-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.ins-controls select{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+  border-radius:6px;padding:4px 8px;font-family:inherit}
+.ins-section{margin:18px 0}
+.ins-section h2{font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--mut);margin:0 0 8px}
+.ins-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.ins-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.ins-card .k{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+.ins-card .v{font-size:20px;font-weight:800;color:var(--txt);font-family:'Unbounded',sans-serif}
+.ins-chart{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:10px;margin:6px 0}
+.ins-chart .cap{font-size:10px;color:var(--mut);margin-bottom:4px}
+.ins-empty{color:var(--mut);text-align:center;padding:32px 0}
+.ins-cov{font-size:10px;color:var(--mut);margin-top:6px}
+svg.chart{display:block;max-width:360px;margin:auto}
