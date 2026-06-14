@@ -62,5 +62,14 @@
     "enabled": true,
     "extra_suffixes_file": "title_suffixes.txt"
   },
+  "follow": {
+    "enabled": true,
+    "run_hour": 4,
+    "lookback_days": 7,
+    "default_backfill_days": 30,
+    "playlist_name": "NEW RELEASES",
+    "playlist_cap": 100,
+    "notify": { "webhook_url": "", "ntfy_topic": "" }
+  },
   "hostname": "amusicserver.local"
 }

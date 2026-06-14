@@ -103,6 +103,26 @@ Web UI: vanilla JS SPA, `web/static/app.js` (~1250 lines), hash router, 4 screen
 | `/spotify/artist` | POST | Spotify artist lookup |
 | `/spotify/playlist` | POST | Spotify playlist fetch |
 | `/spotify/search` | GET | Spotify track search |
+| `/follow/search` | GET | MusicBrainz artist search |
+| `/follow` | GET | List followed artists + state summary |
+| `/follow` | POST | Follow an artist (triggers immediate backfill) |
+| `/follow/<mbid>` | DELETE | Unfollow an artist |
+| `/follow/run` | POST | Trigger a follow run immediately |
+| `/follow/feed` | GET | NEW RELEASES feed (reversed, newest first) |
+| `/follow/feed/seen` | POST | Mark feed as seen (clears unseen badge) |
+| `/follow/settings` | POST | Update `follow.*` config keys live |
+
+### Follow Artists / NEW RELEASES (`follow/`)
+
+- `follow/store.py` — `follows.json` read/write (atomic, idempotent by MBID)
+- `follow/musicbrainz.py` — MusicBrainz client (1 req/s, descriptive User-Agent); search, release-groups, release tracks
+- `follow/listenbrainz.py` — ListenBrainz fresh-releases feed client
+- `follow/fstate.py` — `follow_state.json` — non-expiring acquired set, backfill markers, pending retry queue, feed (capped at 200), unseen count
+- `follow/detect.py` — pure detection: feed filter (intersect followed MBIDs) + one-time per-artist backfill + scope mapping (Singles/EPs full, Albums one track)
+- `follow/notify.py` — feed append + optional webhook JSON + ntfy push
+- `follow/runner.py` — one-run orchestration: detect → resolve → acquire → playlist → notify → state save; retry-3 pending queue; idempotent (acquired set prevents re-download)
+- Server wiring: `_follow_cfg()`, `_build_follow_clients()`, `_run_follow_once()`, `_follow_scheduler_loop()` daemon thread; follow routes added to `server.py`
+- Web UI: Follows screen (artist search, followed list, NEW RELEASES feed, settings panel, Run now button, nav badge)
 
 ### Discovery engine (`discover/`)
 - `run_profile(deps, cfg, profile)` — main entry; handles all 4 seed modes
@@ -212,9 +232,10 @@ These were discussed or designed in earlier sessions but not implemented:
 
 ## Test suite
 
-- 386 tests (`pytest tests/ -q`)
+- ~417 tests (`pytest tests/ -q`)
 - `tests/server/test_routes.py` (~840 lines) — route integration tests using Flask test client
 - `tests/discover/` — engine, seeds, profiles, state unit tests
+- `tests/follow/` — store, MusicBrainz client, ListenBrainz client, fstate, detect, notify, runner unit tests (~27 tests)
 - `tests/library/` — scanner, tagger, enrich, repair, dedupe unit tests
 - `tests/lastfm/` — Last.fm client unit tests
 - `tests/test_setup_wizard.py` — setup/autostart helpers
@@ -244,3 +265,12 @@ These were discussed or designed in earlier sessions but not implemented:
 | `share/codec.py` | `encode_track`, `encode_playlist`, `decode` |
 | `config.example.json` | Reference config with all keys + comments |
 | `discover_state.json` | Runtime state: dedupe TTL, next_runs, last_runs (gitignored) |
+| `follows.json` | Followed-artist list (gitignored, written at runtime) |
+| `follow_state.json` | Follow runtime state: acquired set, backfill markers, feed, pending (gitignored) |
+| `follow/store.py` | Followed-artist list I/O |
+| `follow/musicbrainz.py` | MusicBrainz API client |
+| `follow/listenbrainz.py` | ListenBrainz fresh-releases client |
+| `follow/fstate.py` | `FollowState` — non-expiring state, feed, pending queue |
+| `follow/detect.py` | Feed filter + backfill + scope mapping → download targets |
+| `follow/notify.py` | Feed append + webhook/ntfy push |
+| `follow/runner.py` | One follow run orchestration |
