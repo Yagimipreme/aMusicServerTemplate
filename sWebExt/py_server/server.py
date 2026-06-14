@@ -601,6 +601,10 @@ def _run_insights_sync_once(max_pages=None) -> dict:
             from insights.genres import ensure_artist_tags
             artists = [r[0] for r in conn.execute(
                 "SELECT DISTINCT artist FROM scrobbles").fetchall()]
+            # First sync only: genres are fetched for every artist at ~1 req/s.
+            # Large libraries can take several minutes; cached artists are skipped after.
+            logger.info("[INSIGHTS] tagging %d distinct artists (cached ones skipped)",
+                        len(artists))
             tagged = ensure_artist_tags(lfm, conn, artists)
             synced["artists_tagged"] = tagged
         finally:
