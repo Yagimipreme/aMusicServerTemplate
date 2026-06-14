@@ -241,3 +241,74 @@ def test_all_analytics_handle_empty_db(tmp_path):
     ov = analytics.overview(conn, now_ts=NOW)
     assert ov["total_scrobbles"] == 0 and ov["top_genre"] is None
     assert ov["first_ts"] is None and ov["est_listening_seconds"] == 0
+
+
+def _seed_with_features(conn, scrobble_rows, track_features):
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track) VALUES (?, ?, ?)", scrobble_rows)
+    for (artist, track), f in track_features.items():
+        conn.execute(
+            "INSERT INTO track_features (artist, track, bpm, key, scale, mood, source, analyzed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+            (artist, track, f.get("bpm"), f.get("key"), f.get("scale"),
+             f.get("mood"), f.get("source", "acousticbrainz")))
+    conn.commit()
+
+
+def test_bpm_curve_by_hour(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_features(conn, [(1700000000, "A", "t1")],
+                        {("A", "t1"): {"bpm": 128.0}})
+    bc = analytics.bpm_curve(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert len(bc["hours"]) == 24
+    assert bc["hours"][22] == 128.0
+
+
+def test_bpm_distribution_bins(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_features(conn, [(1700000000, "A", "t1"), (1700000001, "B", "t2")],
+                        {("A", "t1"): {"bpm": 125.0}, ("B", "t2"): {"bpm": 128.0}})
+    dist = analytics.bpm_distribution(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    bin_120 = next(b for b in dist if b["min"] == 120)
+    assert bin_120["count"] == 2
+
+
+def test_key_and_mood_distributions(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_features(conn,
+        [(1700000000, "A", "t1"), (1700000001, "A", "t1"), (1700000002, "B", "t2")],
+        {("A", "t1"): {"key": "A", "scale": "minor", "mood": "happy"},
+         ("B", "t2"): {"key": "C", "scale": "major", "mood": "sad"}})
+    keys = analytics.key_distribution(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert {"key": "A", "scale": "minor", "count": 2} in keys
+    moods = analytics.mood_distribution(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert {"mood": "happy", "count": 2} in moods
+
+
+def test_mood_by_time_shape(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_features(conn, [(1700000000, "A", "t1")], {("A", "t1"): {"mood": "happy"}})
+    mbt = analytics.mood_by_time(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert "happy" in mbt["moods"]
+    assert len(mbt["data"]["happy"]) == 24
+    assert mbt["data"]["happy"][22] == 1
+
+
+def test_feature_coverage(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_features(conn,
+        [(1, "A", "t1"), (2, "B", "t2"), (3, "C", "t3")],
+        {("A", "t1"): {"bpm": 120.0}, ("B", "t2"): {"bpm": 130.0}})
+    cov = analytics.feature_coverage(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert cov["tracks_total"] == 3
+    assert cov["tracks_with_bpm"] == 2
+    assert abs(cov["bpm_pct"] - 2 / 3) < 1e-6
+
+
+def test_overview_includes_avg_bpm_and_coverage(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_features(conn, [(1700000000, "A", "t1"), (1700000001, "B", "t2")],
+                        {("A", "t1"): {"bpm": 120.0}, ("B", "t2"): {"bpm": 140.0}})
+    ov = analytics.overview(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert ov["avg_bpm"] == 130.0
+    assert "feature_coverage" in ov and ov["feature_coverage"]["tracks_with_bpm"] == 2

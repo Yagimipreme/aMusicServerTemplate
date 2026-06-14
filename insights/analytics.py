@@ -321,6 +321,114 @@ def discovery_rate(conn, period="all", tz_offset_min=0, now_ts=None):
     return [{"date": r["d"], "new_artists": r["n"]} for r in rows]
 
 
+_FEATURE_JOIN = (
+    "FROM scrobbles s JOIN track_features f ON f.artist = s.artist AND f.track = s.track"
+)
+
+
+def _feature_where(period, now_ts, *, require):
+    """Feature-join WHERE clause + params. `require` is an f-column predicate
+    (e.g. 'f.bpm IS NOT NULL'); period filters on s.ts."""
+    frag, params = _period_where(period, now_ts)
+    where = f"{_FEATURE_JOIN} WHERE {require}"
+    if frag:
+        where += f" AND s.{frag}"
+    return where, params
+
+
+def bpm_curve(conn, period="all", tz_offset_min=0, now_ts=None):
+    """Average BPM per local hour-of-day. Returns {"hours": [24 floats|None]}."""
+    where, params = _feature_where(period, now_ts, require="f.bpm IS NOT NULL")
+    rows = conn.execute(
+        f"SELECT {_hour_expr(tz_offset_min)} AS h, AVG(f.bpm) AS avg_bpm {where} GROUP BY h",
+        params,
+    ).fetchall()
+    hours = [None] * 24
+    for r in rows:
+        hours[int(r["h"])] = round(r["avg_bpm"], 1)
+    return {"hours": hours}
+
+
+def bpm_distribution(conn, period="all", tz_offset_min=0, now_ts=None,
+                     lo=60, hi=200, width=10):
+    """Histogram of plays by BPM bucket. [{"min","max","count"}]."""
+    where, params = _feature_where(period, now_ts, require="f.bpm IS NOT NULL")
+    rows = conn.execute(f"SELECT f.bpm AS bpm {where}", params).fetchall()
+    edges = list(range(lo, hi, width))
+    bins = [{"min": e, "max": e + width, "count": 0} for e in edges]
+    for r in rows:
+        bpm = r["bpm"]
+        if bpm is None:
+            continue
+        idx = int((bpm - lo) // width)
+        if 0 <= idx < len(bins):
+            bins[idx]["count"] += 1
+    return bins
+
+
+def key_distribution(conn, period="all", tz_offset_min=0, now_ts=None):
+    """Play counts per (key, scale). [{"key","scale","count"}] for the Camelot wheel."""
+    where, params = _feature_where(period, now_ts, require="f.key IS NOT NULL")
+    rows = conn.execute(
+        f"SELECT f.key AS key, f.scale AS scale, COUNT(*) AS n {where} "
+        f"GROUP BY f.key, f.scale ORDER BY n DESC",
+        params,
+    ).fetchall()
+    return [{"key": r["key"], "scale": r["scale"], "count": r["n"]} for r in rows]
+
+
+def mood_distribution(conn, period="all", tz_offset_min=0, now_ts=None):
+    """Play counts per mood label. [{"mood","count"}]."""
+    where, params = _feature_where(period, now_ts, require="f.mood IS NOT NULL")
+    rows = conn.execute(
+        f"SELECT f.mood AS mood, COUNT(*) AS n {where} GROUP BY f.mood ORDER BY n DESC",
+        params,
+    ).fetchall()
+    return [{"mood": r["mood"], "count": r["n"]} for r in rows]
+
+
+def mood_by_time(conn, period="all", tz_offset_min=0, now_ts=None):
+    """Per-local-hour mood composition. {"moods": [...], "data": {mood: [24]}}."""
+    where, params = _feature_where(period, now_ts, require="f.mood IS NOT NULL")
+    rows = conn.execute(
+        f"SELECT f.mood AS mood, {_hour_expr(tz_offset_min)} AS h, COUNT(*) AS n "
+        f"{where} GROUP BY mood, h",
+        params,
+    ).fetchall()
+    moods = sorted({r["mood"] for r in rows})
+    data = {m: [0] * 24 for m in moods}
+    for r in rows:
+        data[r["mood"]][int(r["h"])] = r["n"]
+    return {"moods": moods, "data": data}
+
+
+def feature_coverage(conn, period="all", tz_offset_min=0, now_ts=None):
+    """How many DISTINCT in-period tracks have BPM/mood features.
+
+    {"tracks_total","tracks_with_bpm","tracks_with_mood","bpm_pct","mood_pct"}.
+    """
+    where, params = _period_where(period, now_ts)
+    clause = _and(where)
+    total = conn.execute(
+        f"SELECT COUNT(DISTINCT artist || char(31) || track) FROM scrobbles {clause}",
+        params).fetchone()[0]
+    fwhere, fparams = _feature_where(period, now_ts, require="f.bpm IS NOT NULL")
+    with_bpm = conn.execute(
+        f"SELECT COUNT(DISTINCT s.artist || char(31) || s.track) {fwhere}", fparams
+    ).fetchone()[0]
+    mwhere, mparams = _feature_where(period, now_ts, require="f.mood IS NOT NULL")
+    with_mood = conn.execute(
+        f"SELECT COUNT(DISTINCT s.artist || char(31) || s.track) {mwhere}", mparams
+    ).fetchone()[0]
+    return {
+        "tracks_total": total,
+        "tracks_with_bpm": with_bpm,
+        "tracks_with_mood": with_mood,
+        "bpm_pct": (with_bpm / total) if total else 0.0,
+        "mood_pct": (with_mood / total) if total else 0.0,
+    }
+
+
 def overview(conn, period="all", tz_offset_min=0, now_ts=None):
     """Summary scalars for the period."""
     where, params = _period_where(period, now_ts)
@@ -330,6 +438,12 @@ def overview(conn, period="all", tz_offset_min=0, now_ts=None):
         f"COUNT(DISTINCT artist || char(31) || track) AS tracks, "
         f"MIN(ts) AS lo, MAX(ts) AS hi FROM scrobbles {clause}", params).fetchone()
     tg = top_genres(conn, period=period, tz_offset_min=tz_offset_min, now_ts=now_ts, limit=1)
+    avg_bpm_row = conn.execute(
+        f"SELECT AVG(f.bpm) AS a FROM scrobbles s "
+        f"JOIN track_features f ON f.artist = s.artist AND f.track = s.track "
+        f"WHERE f.bpm IS NOT NULL" + (f" AND s.{where}" if where else ""), params
+    ).fetchone()
+    avg_bpm = round(avg_bpm_row["a"], 1) if avg_bpm_row["a"] is not None else None
     return {
         "total_scrobbles": row["total"],
         "unique_artists": row["artists"],
@@ -338,4 +452,7 @@ def overview(conn, period="all", tz_offset_min=0, now_ts=None):
         "last_ts": row["hi"],
         "top_genre": tg[0]["genre"] if tg else None,
         "est_listening_seconds": row["total"] * AVG_TRACK_SECONDS,
+        "avg_bpm": avg_bpm,
+        "feature_coverage": feature_coverage(conn, period=period,
+                                             tz_offset_min=tz_offset_min, now_ts=now_ts),
     }
