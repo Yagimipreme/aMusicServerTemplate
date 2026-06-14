@@ -75,3 +75,52 @@ def test_parse_skips_empty_artist():
          "mbid": "", "date": {"uts": "500"}},
     ]}}
     assert scrobbles.parse_recent_tracks(page) == []
+
+
+from unittest.mock import MagicMock
+
+
+def test_insert_scrobbles_dedups_on_primary_key(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    rows = [{"ts": 1, "artist": "A", "track": "T", "album": None,
+             "artist_mbid": None, "recording_mbid": None}]
+    assert scrobbles.insert_scrobbles(conn, rows) == 1
+    # Same PK again → ignored.
+    assert scrobbles.insert_scrobbles(conn, rows) == 0
+    assert conn.execute("SELECT COUNT(*) FROM scrobbles").fetchone()[0] == 1
+
+
+def _page(tracks, total_pages):
+    return {"recenttracks": {"track": tracks,
+                             "@attr": {"totalPages": str(total_pages)}}}
+
+
+def _track(uts, name):
+    return {"artist": {"#text": "A", "mbid": ""}, "name": name,
+            "album": {"#text": ""}, "mbid": "", "date": {"uts": str(uts)}}
+
+
+def test_sync_walks_all_pages_and_records_last_ts(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    client = MagicMock()
+    client.call.side_effect = [
+        _page([_track(300, "c"), _track(250, "b")], 2),
+        _page([_track(100, "a")], 2),
+    ]
+    result = scrobbles.sync_scrobbles(client, "user", conn, page_limit=2)
+    assert result["inserted"] == 3
+    assert result["pages"] == 2
+    assert db.get_state(conn, "last_ts") == "300"
+    assert conn.execute("SELECT COUNT(*) FROM scrobbles").fetchone()[0] == 3
+
+
+def test_sync_resumes_from_stored_last_ts(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    db.set_state(conn, "last_ts", "200")
+    client = MagicMock()
+    client.call.return_value = _page([_track(300, "c")], 1)
+    scrobbles.sync_scrobbles(client, "user", conn, page_limit=50)
+    # The 'from' parameter must be passed so we only fetch newer plays.
+    _, kwargs = client.call.call_args
+    assert kwargs.get("from") == 200
+    assert db.get_state(conn, "last_ts") == "300"

@@ -56,3 +56,49 @@ def total_pages(data: dict) -> int:
         return int(attr.get("totalPages", 1))
     except (TypeError, ValueError):
         return 1
+
+
+def insert_scrobbles(conn, rows: list[dict]) -> int:
+    """INSERT OR IGNORE rows; return the number actually inserted."""
+    if not rows:
+        return 0
+    before = conn.total_changes
+    conn.executemany(
+        "INSERT OR IGNORE INTO scrobbles "
+        "(ts, artist, track, album, artist_mbid, recording_mbid) "
+        "VALUES (:ts, :artist, :track, :album, :artist_mbid, :recording_mbid)",
+        rows,
+    )
+    conn.commit()
+    return conn.total_changes - before
+
+
+def sync_scrobbles(client, username: str, conn, *, page_limit: int = 200,
+                   max_pages: int | None = None) -> dict:
+    """Incrementally pull scrobbles into the store, newest pages first.
+
+    Resumes from sync_state['last_ts'] using the API's `from` filter, and
+    relies on INSERT OR IGNORE to dedup the boundary play. Returns
+    {"inserted", "pages", "last_ts"}.
+    """
+    from insights import db
+
+    last_ts = int(db.get_state(conn, "last_ts", "0") or 0)
+    inserted = 0
+    page = 1
+    while True:
+        params = {"user": username, "limit": page_limit, "page": page}
+        if last_ts:
+            params["from"] = last_ts
+        data = client.call("user.getRecentTracks", **params)
+        rows = parse_recent_tracks(data)
+        inserted += insert_scrobbles(conn, rows)
+        pages = total_pages(data)
+        if page >= pages or (max_pages and page >= max_pages) or not rows:
+            break
+        page += 1
+
+    newest = conn.execute("SELECT MAX(ts) FROM scrobbles").fetchone()[0]
+    if newest is not None:
+        db.set_state(conn, "last_ts", str(newest))
+    return {"inserted": inserted, "pages": page, "last_ts": newest}
