@@ -4,7 +4,10 @@ Sole owner of the insights schema. One connection per thread (sqlite3
 connections are not safe to share across threads).
 """
 
+import logging
 import sqlite3
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS scrobbles (
@@ -51,6 +54,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 def init_schema(conn: sqlite3.Connection) -> None:
     """Create all tables/indexes if absent. Idempotent."""
     conn.executescript(_SCHEMA)
+    # CREATE ... statements run in autocommit; commit() here is a harmless safety net.
     conn.commit()
 
 
@@ -58,12 +62,14 @@ def connect(db_path: str) -> sqlite3.Connection:
     """Open (creating if needed) the insights DB with the schema applied."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+    if mode != "wal":
+        logger.warning("insights db: WAL mode unavailable (got %r); concurrent reads may degrade", mode)
     init_schema(conn)
     return conn
 
 
-def get_state(conn: sqlite3.Connection, key: str, default=None):
+def get_state(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
     """Return a sync_state value, or default if the key is absent."""
     row = conn.execute(
         "SELECT value FROM sync_state WHERE key = ?", (key,)

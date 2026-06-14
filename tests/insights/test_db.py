@@ -36,3 +36,11 @@ def test_state_get_set_roundtrip(tmp_path):
     assert db.get_state(conn, "last_ts") == "12345"
     db.set_state(conn, "last_ts", "67890")
     assert db.get_state(conn, "last_ts") == "67890"
+
+
+def test_connect_creates_indexes(tmp_path):
+    conn = db.connect(str(tmp_path / "insights.db"))
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
+    ).fetchall()
+    assert {r[0] for r in rows} == {"idx_scrobbles_ts", "idx_scrobbles_artist"}
