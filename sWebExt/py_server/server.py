@@ -1329,6 +1329,96 @@ def mixes_suggest():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+# ── Follow routes ─────────────────────────────────────────────────────────────
+
+@app.route("/follow/search", methods=["GET"])
+def follow_search():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"results": []})
+    mb, _ = _build_follow_clients()
+    try:
+        results = mb.search_artist(q, limit=8)
+    except Exception:
+        logger.warning("[FOLLOW] search failed", exc_info=True)
+        return jsonify({"results": [], "error": "search_failed"}), 502
+    return jsonify({"results": results})
+
+
+@app.route("/follow", methods=["GET"])
+def follow_list():
+    from follow import store, fstate
+    follows = store.list_follows(_FOLLOWS_PATH)
+    summary = fstate.load(_FOLLOW_STATE_PATH).summary()
+    return jsonify({"artists": follows, "state": summary})
+
+
+@app.route("/follow", methods=["POST"])
+def follow_add():
+    from follow import store
+    body = request.get_json(force=True, silent=True) or {}
+    mbid = (body.get("mbid") or "").strip()
+    name = (body.get("name") or "").strip()
+    if not mbid or not name:
+        return jsonify({"error": "mbid and name required"}), 400
+    store.add_follow(_FOLLOWS_PATH, mbid=mbid, name=name,
+                     disambiguation=body.get("disambiguation", ""))
+    # kick a background run so backfill happens immediately
+    threading.Thread(target=_run_follow_once, daemon=True).start()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/follow/<mbid>", methods=["DELETE"])
+def follow_remove(mbid):
+    from follow import store
+    store.remove_follow(_FOLLOWS_PATH, mbid)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/follow/run", methods=["POST"])
+def follow_run():
+    result = _run_follow_once()
+    return jsonify(result)
+
+
+@app.route("/follow/feed", methods=["GET"])
+def follow_feed():
+    from follow import fstate
+    st = fstate.load(_FOLLOW_STATE_PATH)
+    return jsonify({"feed": list(reversed(st.feed())),
+                    "unseen_count": st.summary()["unseen_count"]})
+
+
+@app.route("/follow/feed/seen", methods=["POST"])
+def follow_feed_seen():
+    from follow import fstate
+    st = fstate.load(_FOLLOW_STATE_PATH)
+    st.mark_seen()
+    st.save()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/follow/settings", methods=["POST"])
+def follow_settings():
+    body = request.get_json(force=True, silent=True) or {}
+    with _config_lock:
+        cfg = _get_config()
+        follow = dict(_FOLLOW_DEFAULTS)
+        follow.update(cfg.get("follow") or {})
+        for key in ("enabled", "run_hour", "lookback_days",
+                    "default_backfill_days", "playlist_name", "playlist_cap"):
+            if key in body:
+                follow[key] = body[key]
+        if "notify" in body and isinstance(body["notify"], dict):
+            notify = dict(follow.get("notify") or {})
+            notify.update(body["notify"])
+            follow["notify"] = notify
+        cfg["follow"] = follow
+        _atomic_write_config(cfg)
+    _follow_wake.set()
+    return jsonify({"status": "ok", "follow": follow})
+
+
 # ── YouTube search ────────────────────────────────────────────────────────────
 
 @app.route("/yt/search", methods=["GET"])
