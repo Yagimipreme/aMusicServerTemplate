@@ -270,6 +270,12 @@ tokens in `app.css`.
   from `last_ts`, partial progress preserved.
 - AcousticBrainz 404 / network error — mark feature unavailable, try librosa if
   enabled, else count as unknown coverage.
+- **Negative-cache caveat (accepted, Phase 3):** a feature miss is written with
+  `source=NULL` and never retried, so a *transient* AcousticBrainz/MusicBrainz
+  failure is cached indefinitely the same as a genuine coverage gap. Accepted for
+  now (distinguishing transient vs genuine isn't worth the complexity). Phase 5
+  adds a "re-scan rows where `source IS NULL` older than N days" path to recover
+  coverage as upstreams recover or as more tracks gain MBIDs.
 - `librosa` not installed though enabled — degrade gracefully (log once, skip
   local analysis, surface coverage gap); never crash the worker.
 - Empty DB / no scrobbles yet — endpoints return empty payloads; UI shows the
