@@ -1670,6 +1670,126 @@ async function initFollowsBadge() {
   } catch(e) { /* ignore */ }
 }
 
+// ── Insights screen ─────────────────────────────────────────────────────────
+let _insPeriod = 'all';
+const _tz = () => -new Date().getTimezoneOffset();
+
+function _card(k, v) {
+  const c = document.createElement('div'); c.className = 'ins-card';
+  const kk = document.createElement('div'); kk.className = 'k'; kk.textContent = k;
+  const vv = document.createElement('div'); vv.className = 'v'; vv.textContent = v;
+  c.append(kk, vv); return c;
+}
+function _chartCard(caption, svgEl) {
+  const w = document.createElement('div'); w.className = 'ins-chart';
+  const cap = document.createElement('div'); cap.className = 'cap'; cap.textContent = caption;
+  w.append(cap, svgEl); return w;
+}
+function _section(title) {
+  const sec = document.createElement('div'); sec.className = 'ins-section';
+  const h = document.createElement('h2'); h.textContent = title;
+  sec.append(h); return sec;
+}
+function _fmtDur(sec) {
+  const h = Math.round((sec || 0) / 3600); return h >= 1 ? `${h} h` : `${Math.round((sec||0)/60)} min`;
+}
+
+async function renderInsights() {
+  const root = document.getElementById('s-insights');
+  root.replaceChildren();
+
+  const controls = document.createElement('div'); controls.className = 'ins-controls';
+  const sel = document.createElement('select');
+  [['all','All time'],['year','Year'],['90d','90 days'],['30d','30 days'],['7d','7 days']]
+    .forEach(([v, t]) => { const o = document.createElement('option'); o.value = v;
+      o.textContent = t; if (v === _insPeriod) o.selected = true; sel.append(o); });
+  sel.onchange = () => { _insPeriod = sel.value; renderInsights(); };
+  const syncBtn = document.createElement('button'); syncBtn.textContent = 'Sync scrobbles';
+  syncBtn.onclick = () => _runSync('/insights/sync', '/insights/sync/status', syncBtn);
+  const featBtn = document.createElement('button'); featBtn.textContent = 'Analyze audio';
+  featBtn.onclick = () => _runSync('/insights/features/sync', '/insights/features/sync/status', featBtn);
+  controls.append(sel, syncBtn, featBtn);
+  root.append(controls);
+
+  const body = document.createElement('div'); root.append(body);
+  const q = `?period=${_insPeriod}&tz=${_tz()}`;
+  let ov, temporal, genres, features;
+  try {
+    [ov, temporal, genres, features] = await Promise.all([
+      API('/insights/overview' + q), API('/insights/temporal' + q),
+      API('/insights/genres' + q), API('/insights/features' + q),
+    ]);
+  } catch (e) {
+    const err = document.createElement('div'); err.className = 'ins-empty';
+    err.textContent = 'Could not load insights: ' + e.message; body.append(err); return;
+  }
+
+  if (!ov.total_scrobbles) {
+    const empty = document.createElement('div'); empty.className = 'ins-empty';
+    empty.textContent = 'No scrobbles yet — hit "Sync scrobbles" to populate your insights.';
+    body.append(empty); return;
+  }
+
+  const sOv = _section('Overview');
+  const cards = document.createElement('div'); cards.className = 'ins-cards';
+  cards.append(
+    _card('Scrobbles', ov.total_scrobbles.toLocaleString()),
+    _card('Artists', ov.unique_artists.toLocaleString()),
+    _card('Tracks', ov.unique_tracks.toLocaleString()),
+    _card('Listening', _fmtDur(ov.est_listening_seconds)),
+    _card('Top genre', ov.top_genre || '—'),
+    _card('Avg BPM', ov.avg_bpm != null ? ov.avg_bpm : '—'));
+  sOv.append(cards); body.append(sOv);
+
+  const sT = _section('Time');
+  sT.append(
+    _chartCard('Plays by hour of day', barChart(temporal.clock.hours,
+      temporal.clock.hours.map((_, i) => i), {labelEvery: 3})),
+    _chartCard('When you listen (day × hour)', heatmap(temporal.heatmap.matrix,
+      temporal.heatmap.dow_labels)),
+    _chartCard('Plays over time', lineChart(temporal.over_time.map(d => d.plays),
+      {labels: temporal.over_time.map(d => d.date)})));
+  body.append(sT);
+
+  const sG = _section('Genres');
+  sG.append(
+    _chartCard('Top genres', hBars(genres.top.map(g => ({label: g.genre, value: g.plays})),
+      {fmt: v => v.toLocaleString()})),
+    _chartCard('Genre by hour', stackedBars(
+      {keys: genres.by_hour.genres, data: genres.by_hour.data},
+      Array.from({length: 24}, (_, i) => i), {labelEvery: 3})));
+  const gdiv = document.createElement('div'); gdiv.className = 'ins-cov';
+  gdiv.textContent = `Genre diversity: ${genres.diversity.distinct} genres · ` +
+    `${(genres.diversity.normalized_entropy * 100).toFixed(0)}% even`;
+  sG.append(gdiv); body.append(sG);
+
+  const sS = _section('Sound');
+  sS.append(
+    _chartCard('BPM distribution', barChart(features.bpm_distribution.map(b => b.count),
+      features.bpm_distribution.map(b => b.min), {labelEvery: 3})),
+    _chartCard('Energy through the day (avg BPM)',
+      lineChart(features.bpm_curve.hours, {labels: features.bpm_curve.hours.map((_, i) => i)})),
+    _chartCard('Keys', camelotWheel(features.key_distribution)),
+    _chartCard('Moods', hBars(features.mood_distribution.map(m => ({label: m.mood, value: m.count})))));
+  const cov = document.createElement('div'); cov.className = 'ins-cov';
+  cov.textContent = `BPM/mood known for ${(features.coverage.bpm_pct * 100).toFixed(0)}% of tracks`;
+  sS.append(cov); body.append(sS);
+}
+
+async function _runSync(postUrl, statusUrl, btn) {
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = '…syncing';
+  try {
+    await API(postUrl, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const st = await API(statusUrl);
+      if (st.status && !['running', 'started'].includes(st.status)) break;
+    }
+  } catch (e) { /* surfaced on re-render */ }
+  btn.disabled = false; btn.textContent = orig;
+  renderInsights();
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1677,8 +1797,9 @@ document.addEventListener('DOMContentLoaded', () => {
   screens['mixes']   = {el: document.getElementById('s-mixes'),   render: renderMixes};
   screens['library'] = {el: document.getElementById('s-library'), render: renderLibrary};
   screens['search']  = {el: document.getElementById('s-search'),  render: renderSearch};
-  screens['follows'] = {el: document.getElementById('s-follows'), render: renderFollows};
-  screens['setup']   = {el: document.getElementById('s-setup'),   render: renderSetup};
+  screens['follows']  = {el: document.getElementById('s-follows'),  render: renderFollows};
+  screens['insights'] = {el: document.getElementById('s-insights'), render: renderInsights};
+  screens['setup']    = {el: document.getElementById('s-setup'),    render: renderSetup};
 
   // Clock
   function updateClock() {
