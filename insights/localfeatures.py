@@ -39,10 +39,14 @@ def analyze_file(path: str) -> "dict | None":
         logger.warning("localfeatures: librosa not installed; skipping local analysis")
         return None
     try:
-        y, sr = librosa.load(path, mono=True, duration=120)
+        # 60 s sample + chroma_stft (not chroma_cqt) keeps per-file analysis to a
+        # few seconds; cqt is far more accurate but ~10x slower and the key here
+        # is only a heuristic.
+        y, sr = librosa.load(path, mono=True, duration=60)
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        tempo = float(tempo)
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+        # librosa >=0.10 returns tempo as an ndarray, not a scalar.
+        tempo = float(np.atleast_1d(tempo)[0])
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
         key_idx = int(np.argmax(chroma.mean(axis=1)))
         rms = float(np.mean(librosa.feature.rms(y=y)))
     except Exception:

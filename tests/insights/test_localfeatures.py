@@ -23,10 +23,12 @@ def test_analyze_file_with_mocked_librosa(monkeypatch):
     np = pytest.importorskip("numpy")
     fake = MagicMock()
     fake.load.return_value = (np.zeros(2048, dtype="float32"), 22050)
-    fake.beat.beat_track.return_value = (128.0, None)
+    # librosa >=0.10 returns tempo as an ndarray, not a scalar — mirror that
+    # so the float(np.atleast_1d(tempo)[0]) handling is actually exercised.
+    fake.beat.beat_track.return_value = (np.array([128.0]), None)
     chroma = np.zeros((12, 4))
     chroma[0, :] = 1.0
-    fake.feature.chroma_cqt.return_value = chroma
+    fake.feature.chroma_stft.return_value = chroma
     fake.feature.rms.return_value = np.array([[0.05]])
     monkeypatch.setitem(sys.modules, "librosa", fake)
 
