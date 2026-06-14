@@ -981,3 +981,30 @@ def test_insights_features_sync_status_idle(client):
     resp = client.get("/insights/features/sync/status")
     assert resp.status_code == 200
     assert resp.get_json()["status"] in ("idle", "ok", "started", "skipped", "disabled", "running")
+
+
+def test_mb_recording_search_score_filter(monkeypatch):
+    import sWebExt.py_server.server as server
+    import urllib.request, json, io
+
+    monkeypatch.setattr(server.time, "sleep", lambda *_: None)
+
+    def fake_urlopen(payload):
+        def _open(req, timeout=None):
+            return io.BytesIO(json.dumps(payload).encode())
+        return _open
+
+    # high score → id
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        fake_urlopen({"recordings": [{"id": "good", "score": 95}]}))
+    assert server._mb_recording_search("Artist", "Track") == "good"
+
+    # low score → None
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        fake_urlopen({"recordings": [{"id": "weak", "score": 50}]}))
+    assert server._mb_recording_search("Artist", "Track") is None
+
+    # no recordings → None
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        fake_urlopen({"recordings": []}))
+    assert server._mb_recording_search("Artist", "Track") is None

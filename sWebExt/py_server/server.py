@@ -672,6 +672,7 @@ def _run_insights_features_once(max_tracks=200) -> dict:
     if not _insights_features_running.acquire(blocking=False):
         return {"status": "skipped", "reason": "already running"}
     try:
+        _insights_features_last_result = {"status": "running"}
         from discover.config import load_config
         from insights import db as insights_db
         from insights.features import ensure_track_features
