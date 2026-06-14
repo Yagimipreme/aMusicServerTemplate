@@ -51,7 +51,16 @@
   },
   "enrich": {
     "enabled": false,
-    "only_missing_genre": true
+    "min_musicbrainz_score": 90,
+    "cover_art_size": "500",
+    "fields": {
+      "genre":        { "enabled": true, "only_missing": true },
+      "year":         { "enabled": true, "only_missing": true },
+      "album":        { "enabled": true, "only_missing": true },
+      "album_artist": { "enabled": true, "only_missing": true },
+      "mbids":        { "enabled": true, "only_missing": true },
+      "cover_art":    { "enabled": true, "only_missing": true }
+    }
   },
   "dedup": {
     "enabled": false,
