@@ -429,6 +429,54 @@ def feature_coverage(conn, period="all", tz_offset_min=0, now_ts=None):
     }
 
 
+def library_overlap(conn, period="all", tz_offset_min=0, now_ts=None):
+    """How much in-period listening is in the local library.
+
+    Returns {tracks_total, tracks_in_library, track_pct, plays_total,
+    plays_in_library, plays_pct}. Match is on normalized lower(trim) keys.
+    """
+    where, params = _period_where(period, now_ts)
+    clause = _and(where)
+    in_lib = ("EXISTS (SELECT 1 FROM library_tracks l "
+              "WHERE l.artist = lower(trim(s.artist)) AND l.track = lower(trim(s.track)))")
+    row = conn.execute(
+        f"SELECT COUNT(*) AS plays_total, "
+        f"SUM(CASE WHEN {in_lib} THEN 1 ELSE 0 END) AS plays_in, "
+        f"COUNT(DISTINCT s.artist || char(31) || s.track) AS tracks_total, "
+        f"COUNT(DISTINCT CASE WHEN {in_lib} THEN s.artist || char(31) || s.track END) AS tracks_in "
+        f"FROM scrobbles s {clause}", params).fetchone()
+    plays_total = row["plays_total"] or 0
+    plays_in = row["plays_in"] or 0
+    tracks_total = row["tracks_total"] or 0
+    tracks_in = row["tracks_in"] or 0
+    return {
+        "tracks_total": tracks_total,
+        "tracks_in_library": tracks_in,
+        "track_pct": (tracks_in / tracks_total) if tracks_total else 0.0,
+        "plays_total": plays_total,
+        "plays_in_library": plays_in,
+        "plays_pct": (plays_in / plays_total) if plays_total else 0.0,
+    }
+
+
+def missing_favorites(conn, period="all", tz_offset_min=0, now_ts=None, limit=25):
+    """Most-played in-period tracks NOT in the local library.
+
+    [{"artist","track","plays"}] — shaped to feed /import/tracks for one-click
+    acquisition.
+    """
+    where, params = _period_where(period, now_ts)
+    clause = _and(where)
+    rows = conn.execute(
+        f"SELECT s.artist AS artist, s.track AS track, COUNT(*) AS n FROM scrobbles s "
+        f"{clause} {'AND' if where else 'WHERE'} NOT EXISTS "
+        f"(SELECT 1 FROM library_tracks l "
+        f" WHERE l.artist = lower(trim(s.artist)) AND l.track = lower(trim(s.track))) "
+        f"GROUP BY s.artist, s.track ORDER BY n DESC LIMIT ?",
+        params + [limit]).fetchall()
+    return [{"artist": r["artist"], "track": r["track"], "plays": r["n"]} for r in rows]
+
+
 def overview(conn, period="all", tz_offset_min=0, now_ts=None):
     """Summary scalars for the period."""
     where, params = _period_where(period, now_ts)

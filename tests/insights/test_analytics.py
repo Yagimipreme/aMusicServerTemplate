@@ -314,3 +314,35 @@ def test_overview_includes_avg_bpm_and_coverage(tmp_path):
     ov = analytics.overview(conn, period="all", tz_offset_min=0, now_ts=NOW)
     assert ov["avg_bpm"] == 130.0
     assert "feature_coverage" in ov and ov["feature_coverage"]["tracks_with_bpm"] == 2
+
+
+def _seed_library(conn, scrobble_rows, library_keys):
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track) VALUES (?, ?, ?)", scrobble_rows)
+    for a, t in library_keys:
+        conn.execute("INSERT OR IGNORE INTO library_tracks (artist, track) VALUES (?, ?)",
+                     (a, t))
+    conn.commit()
+
+
+def test_library_overlap(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_library(conn,
+        [(1, "A", "t1"), (2, "A", "t1"), (3, "B", "t2"), (4, "C", "t3")],
+        [("a", "t1")])
+    ov = analytics.library_overlap(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert ov["tracks_total"] == 3
+    assert ov["tracks_in_library"] == 1
+    assert ov["plays_total"] == 4
+    assert ov["plays_in_library"] == 2
+    assert abs(ov["plays_pct"] - 0.5) < 1e-6
+
+
+def test_missing_favorites(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_library(conn,
+        [(1, "A", "t1"), (2, "B", "t2"), (3, "B", "t2"), (4, "B", "t2")],
+        [("a", "t1")])
+    mf = analytics.missing_favorites(conn, period="all", tz_offset_min=0, now_ts=NOW, limit=10)
+    assert mf[0] == {"artist": "B", "track": "t2", "plays": 3}
+    assert all(not (m["artist"] == "A") for m in mf)
