@@ -86,6 +86,21 @@ _sc_client_ready = False
 _enrich_running = threading.Lock()
 _enrich_last_result: dict = {"status": "idle"}
 
+_ENRICH_ALL_FIELDS = ("genre", "year", "album", "album_artist", "mbids", "cover_art")
+
+
+def _enrich_fields(enrich_cfg):
+    """Return the per-field config dict, mapping legacy only_missing_genre."""
+    fields = enrich_cfg.get("fields")
+    if fields:
+        return fields
+    only_missing_genre = enrich_cfg.get("only_missing_genre", True)
+    built = {f: {"enabled": True, "only_missing": True}
+             for f in _ENRICH_ALL_FIELDS}
+    built["genre"]["only_missing"] = bool(only_missing_genre)
+    return built
+
+
 # ── Repair state ──────────────────────────────────────────────────────────────
 
 _repair_running = threading.Lock()
@@ -619,9 +634,9 @@ def _run_enrich_once(limit=None) -> dict:
     try:
         from discover.config import load_config
         cfg = load_config(_CONFIG_PATH)
-        api_key = cfg.get("lastfm_api_key", "")
-        if not api_key:
-            result = {"status": "disabled", "reason": "lastfm_api_key not configured"}
+        enrich_cfg = cfg.get("enrich") or {}
+        if not enrich_cfg.get("enabled", False):
+            result = {"status": "disabled", "reason": "enrich disabled in config"}
             _enrich_last_result = result
             return result
         song_dir = cfg.get("song_dir", "")
@@ -629,13 +644,32 @@ def _run_enrich_once(limit=None) -> dict:
             result = {"status": "disabled", "reason": "song_dir not set"}
             _enrich_last_result = result
             return result
-        enrich_cfg = cfg.get("enrich") or {}
-        only_missing = enrich_cfg.get("only_missing_genre", True)
-        from lastfm.client import LastFMClient
+
+        fields = _enrich_fields(enrich_cfg)
+        min_score = int(enrich_cfg.get("min_musicbrainz_score", 90))
+        cover_size = str(enrich_cfg.get("cover_art_size", "500"))
+
+        lfm = None
+        api_key = cfg.get("lastfm_api_key", "")
+        if api_key:
+            from lastfm.client import LastFMClient
+            lfm = LastFMClient(api_key)
+        from follow.musicbrainz import MusicBrainzClient
+        mbc = MusicBrainzClient()
+
         from library.enrich import run as enrich_run
-        lfm = LastFMClient(api_key)
-        result = enrich_run(song_dir, lfm, only_missing_genre=only_missing, limit=limit)
+
+        def _progress(done, total):
+            global _enrich_last_result
+            _enrich_last_result = {"status": "running",
+                                   "files_done": done, "files_total": total}
+
+        result = enrich_run(song_dir, lastfm_client=lfm, mb_client=mbc,
+                            fields=fields, min_musicbrainz_score=min_score,
+                            cover_art_size=cover_size, limit=limit,
+                            progress=_progress)
         result["status"] = "ok"
+        result["files_done"] = result.get("files_total", 0)
         logger.info("[ENRICH] complete: %s", result)
         _enrich_last_result = result
         return result
@@ -1079,11 +1113,15 @@ def dedup_report():
 
 @app.route("/library/enrich", methods=["POST"])
 def library_enrich():
+    global _enrich_last_result
+    if _enrich_running.locked():
+        return jsonify({"status": "skipped", "reason": "already running"})
     body = request.get_json(force=True, silent=True) or {}
     limit = body.get("limit", None)
+    _enrich_last_result = {"status": "running", "files_done": 0, "files_total": 0}
     t = threading.Thread(target=_run_enrich_once, kwargs={"limit": limit}, daemon=True)
     t.start()
-    return jsonify({"status": "started"})
+    return jsonify({"status": "running"})
 
 
 @app.route("/library/enrich/status", methods=["GET"])
