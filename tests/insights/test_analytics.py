@@ -217,3 +217,27 @@ def test_overview_summary(tmp_path):
     assert ov["first_ts"] == 1700000000
     assert ov["last_ts"] == 1700000002
     assert ov["est_listening_seconds"] == 3 * analytics.AVG_TRACK_SECONDS
+
+
+def test_all_analytics_handle_empty_db(tmp_path):
+    """Every analytics function returns a well-formed empty result on an empty DB.
+
+    The UI hits these endpoints before any sync has run, so empty must never crash.
+    """
+    conn = db.connect(str(tmp_path / "empty.db"))
+    assert analytics.listening_clock(conn, now_ts=NOW)["hours"] == [0] * 24
+    assert len(analytics.hour_day_heatmap(conn, now_ts=NOW)["matrix"]) == 7
+    assert analytics.weekday_weekend(conn, now_ts=NOW)["weekday"] == 0
+    assert analytics.plays_over_time(conn, now_ts=NOW) == []
+    assert analytics.top_genres(conn, now_ts=NOW) == []
+    assert analytics.genre_by_hour(conn, now_ts=NOW) == {"genres": [], "data": {}}
+    assert analytics.genre_diversity(conn, now_ts=NOW) == {
+        "distinct": 0, "entropy": 0.0, "normalized_entropy": 0.0}
+    assert analytics.genre_evolution(conn, now_ts=NOW) == {
+        "buckets": [], "genres": [], "data": {}}
+    assert analytics.top_entities(conn, "artist", now_ts=NOW) == []
+    assert analytics.new_vs_repeat(conn, now_ts=NOW) == {"first": 0, "repeat": 0}
+    assert analytics.discovery_rate(conn, now_ts=NOW) == []
+    ov = analytics.overview(conn, now_ts=NOW)
+    assert ov["total_scrobbles"] == 0 and ov["top_genre"] is None
+    assert ov["first_ts"] is None and ov["est_listening_seconds"] == 0
