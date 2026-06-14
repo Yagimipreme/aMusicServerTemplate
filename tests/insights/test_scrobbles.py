@@ -79,6 +79,14 @@ def test_parse_skips_empty_artist():
     assert scrobbles.parse_recent_tracks(page) == []
 
 
+def test_parse_skips_empty_track():
+    page = {"recenttracks": {"track": [
+        {"artist": {"#text": "A"}, "name": "", "album": {"#text": ""},
+         "mbid": "", "date": {"uts": "500"}},
+    ]}}
+    assert scrobbles.parse_recent_tracks(page) == []
+
+
 def test_insert_scrobbles_dedups_on_primary_key(tmp_path):
     conn = db.connect(str(tmp_path / "i.db"))
     rows = [{"ts": 1, "artist": "A", "track": "T", "album": None,

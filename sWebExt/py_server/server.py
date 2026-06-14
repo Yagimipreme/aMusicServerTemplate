@@ -570,7 +570,12 @@ def _insights_db_path() -> str:
     return insights_cfg.get("db_path") or os.path.join(_PROJECT_ROOT, "insights.db")
 
 
-def _run_insights_sync_once(limit=None) -> dict:
+def _run_insights_sync_once(max_pages=None) -> dict:
+    """Run one on-demand scrobble sync.
+
+    Phase 1 wires on-demand sync only; the scheduled/on-start triggers
+    described in the design spec are deferred to a later phase.
+    """
     global _insights_last_result
     if not _insights_running.acquire(blocking=False):
         return {"status": "skipped", "reason": "already running"}
@@ -592,7 +597,7 @@ def _run_insights_sync_once(limit=None) -> dict:
         lfm = LastFMClient(api_key)
         conn = insights_db.connect(_insights_db_path())
         try:
-            synced = sync_scrobbles(lfm, username, conn, max_pages=limit)
+            synced = sync_scrobbles(lfm, username, conn, max_pages=max_pages)
         finally:
             conn.close()
         result = {"status": "ok", **synced}
@@ -1044,9 +1049,9 @@ def enrich_status():
 @app.route("/insights/sync", methods=["POST"])
 def insights_sync():
     body = request.get_json(force=True, silent=True) or {}
-    limit = body.get("limit", None)
+    max_pages = body.get("max_pages", None)
     t = threading.Thread(target=_run_insights_sync_once,
-                         kwargs={"limit": limit}, daemon=True)
+                         kwargs={"max_pages": max_pages}, daemon=True)
     t.start()
     return jsonify({"status": "started"})
 

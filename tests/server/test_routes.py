@@ -121,9 +121,9 @@ def test_insights_sync_starts_worker(client, monkeypatch):
 
     called = {}
 
-    def fake_sync(limit=None):
+    def fake_sync(max_pages=None):
         called["ran"] = True
-        called["limit"] = limit
+        called["max_pages"] = max_pages
         return {"status": "ok"}
 
     class _ImmediateThread:
@@ -137,11 +137,11 @@ def test_insights_sync_starts_worker(client, monkeypatch):
     monkeypatch.setattr(server, "_run_insights_sync_once", fake_sync)
     monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
 
-    resp = client.post("/insights/sync", json={"limit": 2})
+    resp = client.post("/insights/sync", json={"max_pages": 2})
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "started"
     assert called.get("ran") is True
-    assert called.get("limit") == 2
+    assert called.get("max_pages") == 2
 
 
 # ── Settings routes ───────────────────────────────────────────────────────────

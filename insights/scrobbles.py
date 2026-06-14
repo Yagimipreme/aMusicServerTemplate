@@ -37,10 +37,15 @@ def parse_recent_tracks(data: dict) -> list[dict]:
             logger.warning("parse_recent_tracks: skipping scrobble with empty artist at ts=%s", uts)
             continue
 
+        track_name = (t.get("name") or "").strip()
+        if not track_name:
+            logger.warning("parse_recent_tracks: skipping scrobble with empty track at ts=%s", uts)
+            continue
+
         rows.append({
             "ts": int(uts),
             "artist": artist_name,
-            "track": (t.get("name") or "").strip(),
+            "track": track_name,
             "album": _clean(album.get("#text")),
             "artist_mbid": _clean(artist.get("mbid")),
             "recording_mbid": _clean(t.get("mbid")),
