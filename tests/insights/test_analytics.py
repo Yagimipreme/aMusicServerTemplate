@@ -181,6 +181,27 @@ def test_discovery_rate_buckets_first_seen_artists(tmp_path):
     assert dr == [{"date": "2023-11-14", "new_artists": 2}]
 
 
+def test_top_entities_albums_excludes_null(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track, album) VALUES (?, ?, ?, ?)",
+        [(1700000000, "A", "t1", "Alb1"), (1700000001, "A", "t2", "Alb1"),
+         (1700000002, "B", "t3", None)])
+    conn.commit()
+    albs = analytics.top_entities(conn, "album", period="all", tz_offset_min=0,
+                                  now_ts=NOW, limit=10)
+    assert albs == [{"album": "Alb1", "plays": 2}]  # NULL album excluded
+
+
+def test_discovery_rate_finite_period_filters(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    old = NOW - 100 * 86400      # artist X first-seen long ago
+    recent = NOW - 5 * 86400     # artist Y first-seen recently (2023-11-11)
+    _seed(conn, [(old, "X", "t1"), (recent, "Y", "t2")])
+    dr = analytics.discovery_rate(conn, period="30d", tz_offset_min=0, now_ts=NOW)
+    assert dr == [{"date": "2023-11-11", "new_artists": 1}]  # only Y within window
+
+
 def test_overview_summary(tmp_path):
     conn = db.connect(str(tmp_path / "i.db"))
     _seed_with_genres(

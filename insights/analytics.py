@@ -268,11 +268,11 @@ def top_entities(conn, kind, period="all", tz_offset_min=0, now_ts=None, limit=2
             f"GROUP BY artist, track ORDER BY n DESC LIMIT ?", params + [limit]).fetchall()
         return [{"artist": r["artist"], "track": r["track"], "plays": r["n"]} for r in rows]
     if kind == "album":
-        album_clause = _and(where) or "WHERE 1=1"
+        album_filter = (f"{clause} AND album IS NOT NULL" if clause
+                        else "WHERE album IS NOT NULL")
         rows = conn.execute(
-            f"SELECT album, COUNT(*) AS n FROM scrobbles {album_clause} "
-            f"AND album IS NOT NULL GROUP BY album ORDER BY n DESC LIMIT ?",
-            params + [limit]).fetchall()
+            f"SELECT album, COUNT(*) AS n FROM scrobbles {album_filter} "
+            f"GROUP BY album ORDER BY n DESC LIMIT ?", params + [limit]).fetchall()
         return [{"album": r["album"], "plays": r["n"]} for r in rows]
     raise ValueError(f"unknown entity kind: {kind!r}")
 
@@ -285,12 +285,15 @@ def new_vs_repeat(conn, period="all", tz_offset_min=0, now_ts=None):
     """
     where, params = _period_where(period, now_ts)
     clause = _and(where)
+    # `where` is a bare "ts >= ?" fragment; we must qualify it as s.ts here
+    # because both `scrobbles s` and the `firsts f` CTE expose a `ts`/`fts`.
+    period_filter = f"WHERE s.{where}" if where else ""
     first = conn.execute(
         "WITH firsts AS (SELECT artist, track, MIN(ts) AS fts FROM scrobbles "
         "GROUP BY artist, track) "
-        f"SELECT COUNT(*) FROM scrobbles s JOIN firsts f "
+        "SELECT COUNT(*) FROM scrobbles s JOIN firsts f "
         "ON f.artist = s.artist AND f.track = s.track AND f.fts = s.ts "
-        + (f"WHERE s.{where}" if where else ""), params).fetchone()[0]
+        f"{period_filter}", params).fetchone()[0]
     total = conn.execute(
         f"SELECT COUNT(*) FROM scrobbles {clause}", params).fetchone()[0]
     return {"first": first, "repeat": total - first}
@@ -300,6 +303,11 @@ def discovery_rate(conn, period="all", tz_offset_min=0, now_ts=None):
     """New (first-seen) artists per local calendar day, within the period.
 
     Returns [{"date": "YYYY-MM-DD", "new_artists": n}] ordered by date.
+
+    Only a lower bound is applied: for a finite period this returns artists
+    whose all-time first listen falls in [period_start, now]. Since now_ts is
+    the reference for period_start, this is the intended "newly discovered in
+    the last N days" semantic.
     """
     where, params = _period_where(period, now_ts)
     first_filter = f"WHERE fts >= ?" if where else ""
