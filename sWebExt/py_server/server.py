@@ -76,6 +76,11 @@ _enrich_last_result: dict = {"status": "idle"}
 _repair_running = threading.Lock()
 _repair_last_result: dict = {"status": "idle"}
 
+# ── Insights sync state ────────────────────────────────────────────────────────
+
+_insights_running = threading.Lock()
+_insights_last_result: dict = {"status": "idle"}
+
 # ── Discover run state ────────────────────────────────────────────────────────
 
 _discover_running = threading.Lock()
@@ -559,6 +564,50 @@ def _run_enrich_once(limit=None) -> dict:
         _enrich_running.release()
 
 
+def _insights_db_path() -> str:
+    cfg = _get_config()
+    insights_cfg = cfg.get("insights") or {}
+    return insights_cfg.get("db_path") or os.path.join(_PROJECT_ROOT, "insights.db")
+
+
+def _run_insights_sync_once(limit=None) -> dict:
+    global _insights_last_result
+    if not _insights_running.acquire(blocking=False):
+        return {"status": "skipped", "reason": "already running"}
+    try:
+        from discover.config import load_config
+        cfg = load_config(_CONFIG_PATH)
+        api_key = cfg.get("lastfm_api_key", "")
+        username = cfg.get("lastfm_username", "")
+        if not api_key or not username:
+            result = {"status": "disabled",
+                      "reason": "lastfm_api_key/lastfm_username not configured"}
+            _insights_last_result = result
+            return result
+
+        from lastfm.client import LastFMClient
+        from insights import db as insights_db
+        from insights.scrobbles import sync_scrobbles
+
+        lfm = LastFMClient(api_key)
+        conn = insights_db.connect(_insights_db_path())
+        try:
+            synced = sync_scrobbles(lfm, username, conn, max_pages=limit)
+        finally:
+            conn.close()
+        result = {"status": "ok", **synced}
+        logger.info("[INSIGHTS] sync complete: %s", result)
+        _insights_last_result = result
+        return result
+    except Exception as e:
+        logger.exception("[INSIGHTS] sync failed")
+        result = {"status": "error", "error": str(e)}
+        _insights_last_result = result
+        return result
+    finally:
+        _insights_running.release()
+
+
 def _run_repair_once(limit=None) -> dict:
     global _repair_last_result
     if not _repair_running.acquire(blocking=False):
@@ -990,6 +1039,21 @@ def library_enrich():
 @app.route("/library/enrich/status", methods=["GET"])
 def enrich_status():
     return jsonify(_enrich_last_result)
+
+
+@app.route("/insights/sync", methods=["POST"])
+def insights_sync():
+    body = request.get_json(force=True, silent=True) or {}
+    limit = body.get("limit", None)
+    t = threading.Thread(target=_run_insights_sync_once,
+                         kwargs={"limit": limit}, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/insights/sync/status", methods=["GET"])
+def insights_sync_status():
+    return jsonify(_insights_last_result)
 
 
 @app.route("/library/repair", methods=["POST"])

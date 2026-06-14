@@ -107,6 +107,29 @@ def test_post_discover_run_daily_skipped(client):
     assert data["status"] == "skipped"
 
 
+# ── Insights sync routes ──────────────────────────────────────────────────────
+
+def test_insights_sync_status_defaults_idle(client):
+    resp = client.get("/insights/sync/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] in ("idle", "ok", "started", "skipped")
+
+
+def test_insights_sync_starts_worker(client, monkeypatch):
+    import sWebExt.py_server.server as server
+
+    called = {}
+
+    def fake_sync(limit=None):
+        called["ran"] = True
+        return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_run_insights_sync_once", fake_sync)
+    resp = client.post("/insights/sync", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "started"
+
+
 # ── Settings routes ───────────────────────────────────────────────────────────
 
 def test_get_settings_returns_schema_and_values(client, tmp_path):
