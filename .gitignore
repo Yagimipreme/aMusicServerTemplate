@@ -20,3 +20,6 @@ build/
 dist/
 *.pyc
 .cache/
+
+# Claude Code worktrees (harness-managed, never commit)
+.claude/worktrees/
