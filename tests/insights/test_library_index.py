@@ -32,3 +32,19 @@ def test_index_library_is_idempotent_and_refreshes(tmp_path):
     rows = {(r["artist"], r["track"]) for r in
             conn.execute("SELECT artist, track FROM library_tracks").fetchall()}
     assert rows == {("b", "t2")}
+
+
+def test_index_library_scan_error_returns_zero(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    # Pre-populate so we can confirm a failed scan does not wipe existing data.
+    conn.execute("INSERT INTO library_tracks (artist, track) VALUES ('a', 't1')")
+    conn.commit()
+
+    def boom(_):
+        raise RuntimeError("scan failed")
+
+    n = library_index.index_library(conn, "/m", scan=boom)
+    assert n == 0
+    # Existing rows are untouched (the DELETE never runs on the exception path).
+    rows = conn.execute("SELECT COUNT(*) FROM library_tracks").fetchone()[0]
+    assert rows == 1
