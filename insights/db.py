@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS track_features (
     PRIMARY KEY (artist, track)
 );
 
+CREATE TABLE IF NOT EXISTS library_tracks (
+    artist TEXT NOT NULL,
+    track  TEXT NOT NULL,
+    PRIMARY KEY (artist, track)
+);
+
 CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT

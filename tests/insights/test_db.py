@@ -44,3 +44,11 @@ def test_connect_creates_indexes(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
     ).fetchall()
     assert {r[0] for r in rows} == {"idx_scrobbles_ts", "idx_scrobbles_artist"}
+
+
+def test_connect_creates_library_tracks(tmp_path):
+    conn = db.connect(str(tmp_path / "insights.db"))
+    names = _tables(conn)
+    assert "library_tracks" in names
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(library_tracks)").fetchall()}
+    assert {"artist", "track"} <= cols
