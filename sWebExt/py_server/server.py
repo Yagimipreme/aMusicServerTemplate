@@ -95,6 +95,10 @@ _repair_last_result: dict = {"status": "idle"}
 
 _discover_running = threading.Lock()
 
+# ── Follow run state ──────────────────────────────────────────────────────────
+
+_follow_running = threading.Lock()
+
 # ── Dedup state ───────────────────────────────────────────────────────────────
 
 _dedup_running = threading.Lock()
@@ -159,27 +163,32 @@ def _build_discover_deps():
 
 
 def _build_follow_clients():
-    """Return (mb_client, lb_client) or (None, None) if requests unavailable."""
+    """Return (mb_client, lb_client)."""
     from follow.musicbrainz import MusicBrainzClient
     from follow.listenbrainz import ListenBrainzClient
     return MusicBrainzClient(), ListenBrainzClient()
 
 
 def _run_follow_once() -> dict:
-    from follow import store, fstate, runner
-    deps = _build_discover_deps()
-    if deps is None:
-        return {"status": "disabled", "reason": "navidrome creds missing"}
-    mb, lb = _build_follow_clients()
-    follows = store.list_follows(_FOLLOWS_PATH)
-    state = fstate.load(_FOLLOW_STATE_PATH)
-    fc = _follow_cfg()
-    result = runner.run_once(
-        mb_client=mb, lb_client=lb, follows=follows, state=state,
-        search_fn=deps.search_fn, download_fn=deps.download_fn,
-        song_dir=deps.song_dir, cfg=fc)
-    logger.info("[FOLLOW] run complete: %s", result)
-    return {"status": "ok", **result}
+    if not _follow_running.acquire(blocking=False):
+        return {"status": "busy", "reason": "another follow run in progress"}
+    try:
+        from follow import store, fstate, runner
+        deps = _build_discover_deps()
+        if deps is None:
+            return {"status": "disabled", "reason": "navidrome creds missing"}
+        mb, lb = _build_follow_clients()
+        follows = store.list_follows(_FOLLOWS_PATH)
+        state = fstate.load(_FOLLOW_STATE_PATH)
+        fc = _follow_cfg()
+        result = runner.run_once(
+            mb_client=mb, lb_client=lb, follows=follows, state=state,
+            search_fn=deps.search_fn, download_fn=deps.download_fn,
+            song_dir=deps.song_dir, cfg=fc)
+        logger.info("[FOLLOW] run complete: %s", result)
+        return {"status": "ok", **result}
+    finally:
+        _follow_running.release()
 
 
 def _run_discover_once():
