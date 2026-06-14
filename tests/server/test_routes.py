@@ -16,6 +16,7 @@ def app():
         from sWebExt.py_server import server as srv
         # Reset global state between test runs
         srv._enrich_last_result = {"status": "idle"}
+        srv._insights_last_result = {"status": "idle"}
         flask_app = srv.app
         flask_app.config["TESTING"] = True
         yield flask_app
@@ -112,7 +113,7 @@ def test_post_discover_run_daily_skipped(client):
 def test_insights_sync_status_defaults_idle(client):
     resp = client.get("/insights/sync/status")
     assert resp.status_code == 200
-    assert resp.get_json()["status"] in ("idle", "ok", "started", "skipped")
+    assert resp.get_json()["status"] == "idle"
 
 
 def test_insights_sync_starts_worker(client, monkeypatch):
@@ -122,12 +123,25 @@ def test_insights_sync_starts_worker(client, monkeypatch):
 
     def fake_sync(limit=None):
         called["ran"] = True
+        called["limit"] = limit
         return {"status": "ok"}
 
+    class _ImmediateThread:
+        def __init__(self, target=None, kwargs=None, daemon=None, **_):
+            self._target = target
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(**self._kwargs)
+
     monkeypatch.setattr(server, "_run_insights_sync_once", fake_sync)
-    resp = client.post("/insights/sync", json={})
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+
+    resp = client.post("/insights/sync", json={"limit": 2})
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "started"
+    assert called.get("ran") is True
+    assert called.get("limit") == 2
 
 
 # ── Settings routes ───────────────────────────────────────────────────────────
