@@ -1008,3 +1008,56 @@ def test_mb_recording_search_score_filter(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen",
                         fake_urlopen({"recordings": []}))
     assert server._mb_recording_search("Artist", "Track") is None
+
+
+def test_post_enrich_sets_running_immediately(client):
+    # threading.Thread is patched in the `app` fixture, so the worker never runs.
+    resp = client.post("/library/enrich")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "running"
+
+    status = client.get("/library/enrich/status")
+    data = json.loads(status.data)
+    assert data["status"] == "running"
+    assert data["files_total"] == 0
+    assert data["files_done"] == 0
+
+
+def test_run_enrich_once_disabled_when_config_disabled():
+    from sWebExt.py_server import server as srv
+    srv._enrich_last_result = {"status": "idle"}
+    with patch("discover.config.load_config",
+               return_value={"enrich": {"enabled": False}, "song_dir": "/x"}):
+        result = srv._run_enrich_once()
+    assert result["status"] == "disabled"
+    assert "disabled" in result["reason"]
+
+
+def test_run_enrich_once_ok_result_has_ui_fields():
+    from sWebExt.py_server import server as srv
+    srv._enrich_last_result = {"status": "idle"}
+    fake_result = {"processed": 2, "files_total": 2, "enriched": 2,
+                   "per_field": {}, "skipped": 0, "errors": 0}
+    with patch("discover.config.load_config",
+               return_value={"enrich": {"enabled": True}, "song_dir": "/x",
+                             "lastfm_api_key": "k"}), \
+         patch("library.enrich.run", return_value=dict(fake_result)), \
+         patch("follow.musicbrainz.MusicBrainzClient"), \
+         patch("lastfm.client.LastFMClient"):
+        result = srv._run_enrich_once()
+    assert result["status"] == "ok"
+    assert result["enriched"] == 2
+    assert result["files_done"] == result["files_total"]
+
+
+def test_enrich_fields_legacy_only_missing_genre():
+    from sWebExt.py_server import server as srv
+    fields = srv._enrich_fields({"only_missing_genre": False})
+    assert fields["genre"] == {"enabled": True, "only_missing": False}
+    assert fields["album"] == {"enabled": True, "only_missing": True}
+
+
+def test_enrich_fields_explicit_block_passthrough():
+    from sWebExt.py_server import server as srv
+    block = {"fields": {"genre": {"enabled": False, "only_missing": True}}}
+    assert srv._enrich_fields(block) == block["fields"]

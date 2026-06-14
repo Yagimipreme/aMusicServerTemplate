@@ -51,7 +51,16 @@
   },
   "enrich": {
     "enabled": false,
-    "only_missing_genre": true
+    "min_musicbrainz_score": 90,
+    "cover_art_size": "500",
+    "fields": {
+      "genre":        { "enabled": true, "only_missing": true },
+      "year":         { "enabled": true, "only_missing": true },
+      "album":        { "enabled": true, "only_missing": true },
+      "album_artist": { "enabled": true, "only_missing": true },
+      "mbids":        { "enabled": true, "only_missing": true },
+      "cover_art":    { "enabled": true, "only_missing": true }
+    }
   },
   "dedup": {
     "enabled": false,
@@ -61,6 +70,15 @@
   "title_cleanup": {
     "enabled": true,
     "extra_suffixes_file": "title_suffixes.txt"
+  },
+  "follow": {
+    "enabled": true,
+    "run_hour": 4,
+    "lookback_days": 7,
+    "default_backfill_days": 30,
+    "playlist_name": "NEW RELEASES",
+    "playlist_cap": 100,
+    "notify": { "webhook_url": "", "ntfy_topic": "" }
   },
   "hostname": "amusicserver.local"
 }

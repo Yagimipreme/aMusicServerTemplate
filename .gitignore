@@ -10,6 +10,10 @@ ffmpeg.exe
 # Local config (contains paths + credentials). Distribute config.example.json.
 config.json
 
+# Follow-artist runtime files (generated at runtime, not checked in).
+follows.json
+follow_state.json
+
 # User playlist exports
 playlists/*.csv
 

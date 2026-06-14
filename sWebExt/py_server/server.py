@@ -28,6 +28,21 @@ _LOG_DIR      = os.path.join(_PROJECT_ROOT, "logs")
 _TEMPLATE_DIR = os.path.join(_PROJECT_ROOT, "web", "templates")
 _STATIC_DIR   = os.path.join(_PROJECT_ROOT, "web", "static")
 
+# ── Follow feature paths + defaults ──────────────────────────────────────────
+
+_FOLLOWS_PATH = os.path.join(_PROJECT_ROOT, "follows.json")
+_FOLLOW_STATE_PATH = os.path.join(_PROJECT_ROOT, "follow_state.json")
+
+_FOLLOW_DEFAULTS = {
+    "enabled": True,
+    "run_hour": 4,
+    "lookback_days": 7,
+    "default_backfill_days": 30,
+    "playlist_name": "NEW RELEASES",
+    "playlist_cap": 100,
+    "notify": {"webhook_url": "", "ntfy_topic": ""},
+}
+
 # Resolve yt-dlp once at startup: prefer the venv's copy so it's always found
 # even when the server is started from a shell without the venv activated.
 _YT_DLP = shutil.which("yt-dlp") or os.path.join(os.path.dirname(sys.executable), "yt-dlp")
@@ -71,6 +86,21 @@ _sc_client_ready = False
 _enrich_running = threading.Lock()
 _enrich_last_result: dict = {"status": "idle"}
 
+_ENRICH_ALL_FIELDS = ("genre", "year", "album", "album_artist", "mbids", "cover_art")
+
+
+def _enrich_fields(enrich_cfg):
+    """Return the per-field config dict, mapping legacy only_missing_genre."""
+    fields = enrich_cfg.get("fields")
+    if fields:
+        return fields
+    only_missing_genre = enrich_cfg.get("only_missing_genre", True)
+    built = {f: {"enabled": True, "only_missing": True}
+             for f in _ENRICH_ALL_FIELDS}
+    built["genre"]["only_missing"] = bool(only_missing_genre)
+    return built
+
+
 # ── Repair state ──────────────────────────────────────────────────────────────
 
 _repair_running = threading.Lock()
@@ -89,6 +119,10 @@ _insights_features_last_result: dict = {"status": "idle"}
 # ── Discover run state ────────────────────────────────────────────────────────
 
 _discover_running = threading.Lock()
+
+# ── Follow run state ──────────────────────────────────────────────────────────
+
+_follow_running = threading.Lock()
 
 # ── Dedup state ───────────────────────────────────────────────────────────────
 
@@ -151,6 +185,35 @@ def _build_discover_deps():
         song_dir=song_dir,
         lastfm_client=lastfm_client,
     )
+
+
+def _build_follow_clients():
+    """Return (mb_client, lb_client)."""
+    from follow.musicbrainz import MusicBrainzClient
+    from follow.listenbrainz import ListenBrainzClient
+    return MusicBrainzClient(), ListenBrainzClient()
+
+
+def _run_follow_once() -> dict:
+    if not _follow_running.acquire(blocking=False):
+        return {"status": "busy", "reason": "another follow run in progress"}
+    try:
+        from follow import store, fstate, runner
+        deps = _build_discover_deps()
+        if deps is None:
+            return {"status": "disabled", "reason": "navidrome creds missing"}
+        mb, lb = _build_follow_clients()
+        follows = store.list_follows(_FOLLOWS_PATH)
+        state = fstate.load(_FOLLOW_STATE_PATH)
+        fc = _follow_cfg()
+        result = runner.run_once(
+            mb_client=mb, lb_client=lb, follows=follows, state=state,
+            search_fn=deps.search_fn, download_fn=deps.download_fn,
+            song_dir=deps.song_dir, cfg=fc)
+        logger.info("[FOLLOW] run complete: %s", result)
+        return {"status": "ok", **result}
+    finally:
+        _follow_running.release()
 
 
 def _run_discover_once():
@@ -422,6 +485,47 @@ def _mix_scheduler_loop():
             time.sleep(3600)
 
 
+# ── Follow scheduler ──────────────────────────────────────────────────────────
+
+_follow_wake = threading.Event()
+
+
+def _follow_next_run(now: datetime.datetime, run_hour: int) -> datetime.datetime:
+    run_hour = max(0, min(23, int(run_hour)))
+    candidate = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += datetime.timedelta(days=1)
+    return candidate
+
+
+def _follow_scheduler_loop():
+    while True:
+        try:
+            fc = _follow_cfg()
+            now = datetime.datetime.now()
+            if not fc.get("enabled", True):
+                _follow_wake.wait(3600)
+                _follow_wake.clear()
+                continue
+            nxt = _follow_next_run(now, fc.get("run_hour", 4))
+            # persist next_run for UI
+            try:
+                from follow import fstate
+                st = fstate.load(_FOLLOW_STATE_PATH)
+                st.set_runs(next_run=nxt.isoformat())
+                st.save()
+            except Exception:
+                logger.warning("[FOLLOW] could not persist next_run", exc_info=True)
+            _follow_wake.wait(max(1.0, (nxt - now).total_seconds()))
+            _follow_wake.clear()
+            now = datetime.datetime.now()
+            if _follow_cfg().get("enabled", True) and now >= nxt:
+                _run_follow_once()
+        except Exception:
+            logger.exception("[FOLLOW] scheduler iteration failed; retry in 3600s")
+            time.sleep(3600)
+
+
 def _run_playlist_mix(playlist_id: str, count: int) -> dict:
     try:
         from discover.config import load_config
@@ -540,9 +644,9 @@ def _run_enrich_once(limit=None) -> dict:
     try:
         from discover.config import load_config
         cfg = load_config(_CONFIG_PATH)
-        api_key = cfg.get("lastfm_api_key", "")
-        if not api_key:
-            result = {"status": "disabled", "reason": "lastfm_api_key not configured"}
+        enrich_cfg = cfg.get("enrich") or {}
+        if not enrich_cfg.get("enabled", False):
+            result = {"status": "disabled", "reason": "enrich disabled in config"}
             _enrich_last_result = result
             return result
         song_dir = cfg.get("song_dir", "")
@@ -550,13 +654,32 @@ def _run_enrich_once(limit=None) -> dict:
             result = {"status": "disabled", "reason": "song_dir not set"}
             _enrich_last_result = result
             return result
-        enrich_cfg = cfg.get("enrich") or {}
-        only_missing = enrich_cfg.get("only_missing_genre", True)
-        from lastfm.client import LastFMClient
+
+        fields = _enrich_fields(enrich_cfg)
+        min_score = int(enrich_cfg.get("min_musicbrainz_score", 90))
+        cover_size = str(enrich_cfg.get("cover_art_size", "500"))
+
+        lfm = None
+        api_key = cfg.get("lastfm_api_key", "")
+        if api_key:
+            from lastfm.client import LastFMClient
+            lfm = LastFMClient(api_key)
+        from follow.musicbrainz import MusicBrainzClient
+        mbc = MusicBrainzClient()
+
         from library.enrich import run as enrich_run
-        lfm = LastFMClient(api_key)
-        result = enrich_run(song_dir, lfm, only_missing_genre=only_missing, limit=limit)
+
+        def _progress(done, total):
+            global _enrich_last_result
+            _enrich_last_result = {"status": "running",
+                                   "files_done": done, "files_total": total}
+
+        result = enrich_run(song_dir, lastfm_client=lfm, mb_client=mbc,
+                            fields=fields, min_musicbrainz_score=min_score,
+                            cover_art_size=cover_size, limit=limit,
+                            progress=_progress)
         result["status"] = "ok"
+        result["files_done"] = result.get("files_total", 0)
         logger.info("[ENRICH] complete: %s", result)
         _enrich_last_result = result
         return result
@@ -883,6 +1006,16 @@ def _get_config() -> dict:
         return {}
 
 
+def _follow_cfg() -> dict:
+    cfg = _get_config()
+    fc = dict(_FOLLOW_DEFAULTS)
+    fc.update(cfg.get("follow") or {})
+    notify = dict(_FOLLOW_DEFAULTS["notify"])
+    notify.update((cfg.get("follow") or {}).get("notify") or {})
+    fc["notify"] = notify
+    return fc
+
+
 def _get_hostname() -> str:
     return _get_config().get("hostname", "amusicserver.local")
 
@@ -1131,11 +1264,15 @@ def dedup_report():
 
 @app.route("/library/enrich", methods=["POST"])
 def library_enrich():
+    global _enrich_last_result
+    if _enrich_running.locked():
+        return jsonify({"status": "skipped", "reason": "already running"})
     body = request.get_json(force=True, silent=True) or {}
     limit = body.get("limit", None)
+    _enrich_last_result = {"status": "running", "files_done": 0, "files_total": 0}
     t = threading.Thread(target=_run_enrich_once, kwargs={"limit": limit}, daemon=True)
     t.start()
-    return jsonify({"status": "started"})
+    return jsonify({"status": "running"})
 
 
 @app.route("/library/enrich/status", methods=["GET"])
@@ -1491,6 +1628,96 @@ def mixes_suggest():
     except Exception as e:
         logger.exception("[MIXES] suggest failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ── Follow routes ─────────────────────────────────────────────────────────────
+
+@app.route("/follow/search", methods=["GET"])
+def follow_search():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"results": []})
+    mb, _ = _build_follow_clients()
+    try:
+        results = mb.search_artist(q, limit=8)
+    except Exception:
+        logger.warning("[FOLLOW] search failed", exc_info=True)
+        return jsonify({"results": [], "error": "search_failed"}), 502
+    return jsonify({"results": results})
+
+
+@app.route("/follow", methods=["GET"])
+def follow_list():
+    from follow import store, fstate
+    follows = store.list_follows(_FOLLOWS_PATH)
+    summary = fstate.load(_FOLLOW_STATE_PATH).summary()
+    return jsonify({"artists": follows, "state": summary})
+
+
+@app.route("/follow", methods=["POST"])
+def follow_add():
+    from follow import store
+    body = request.get_json(force=True, silent=True) or {}
+    mbid = (body.get("mbid") or "").strip()
+    name = (body.get("name") or "").strip()
+    if not mbid or not name:
+        return jsonify({"error": "mbid and name required"}), 400
+    store.add_follow(_FOLLOWS_PATH, mbid=mbid, name=name,
+                     disambiguation=body.get("disambiguation", ""))
+    # kick a background run so backfill happens immediately
+    threading.Thread(target=_run_follow_once, daemon=True).start()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/follow/<mbid>", methods=["DELETE"])
+def follow_remove(mbid):
+    from follow import store
+    store.remove_follow(_FOLLOWS_PATH, mbid)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/follow/run", methods=["POST"])
+def follow_run():
+    result = _run_follow_once()
+    return jsonify(result)
+
+
+@app.route("/follow/feed", methods=["GET"])
+def follow_feed():
+    from follow import fstate
+    st = fstate.load(_FOLLOW_STATE_PATH)
+    return jsonify({"feed": list(reversed(st.feed())),
+                    "unseen_count": st.summary()["unseen_count"]})
+
+
+@app.route("/follow/feed/seen", methods=["POST"])
+def follow_feed_seen():
+    from follow import fstate
+    st = fstate.load(_FOLLOW_STATE_PATH)
+    st.mark_seen()
+    st.save()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/follow/settings", methods=["POST"])
+def follow_settings():
+    body = request.get_json(force=True, silent=True) or {}
+    with _config_lock:
+        cfg = _get_config()
+        follow = dict(_FOLLOW_DEFAULTS)
+        follow.update(cfg.get("follow") or {})
+        for key in ("enabled", "run_hour", "lookback_days",
+                    "default_backfill_days", "playlist_name", "playlist_cap"):
+            if key in body:
+                follow[key] = body[key]
+        if "notify" in body and isinstance(body["notify"], dict):
+            notify = dict(follow.get("notify") or {})
+            notify.update(body["notify"])
+            follow["notify"] = notify
+        cfg["follow"] = follow
+        _atomic_write_config(cfg)
+    _follow_wake.set()
+    return jsonify({"status": "ok", "follow": follow})
 
 
 # ── YouTube search ────────────────────────────────────────────────────────────
@@ -2025,6 +2252,9 @@ def start_background_server(port: int = 5000):
 
     t_mix = threading.Thread(target=_mix_scheduler_loop, daemon=True)
     t_mix.start()
+
+    t_follow = threading.Thread(target=_follow_scheduler_loop, daemon=True)
+    t_follow.start()
 
     from discover.config import load_config as _load_cfg
     _cfg_at_start = _load_cfg(_CONFIG_PATH)

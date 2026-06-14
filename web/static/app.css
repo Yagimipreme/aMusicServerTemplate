@@ -117,6 +117,18 @@ nav button .ico{display:block;font-size:1.15rem;margin-bottom:4px;font-family:'A
 nav button.on{color:var(--acid)}
 nav button.on .ico{text-shadow:0 0 14px rgba(195,255,61,.7)}
 
+/* ---- FOLLOWS ---- */
+.follows-section{border:1px solid var(--line);background:var(--panel);border-radius:4px;margin-bottom:10px;padding:14px}
+.follows-heading{font-family:'Unbounded';font-weight:500;font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin-bottom:12px}
+.follows-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.follows-row:last-child{border-bottom:0}
+.follows-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.follows-name{font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.follows-dis{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}
+.chip.chip-acquired{border-color:#2e3520;color:var(--acid);background:#11150a}
+.chip.chip-unavail{border-color:#3a2226;color:var(--danger);background:transparent}
+.badge{font-family:'JetBrains Mono';font-size:.52rem;background:var(--acid);color:#0a0a00;border-radius:8px;padding:1px 5px;margin-left:4px;vertical-align:middle}
+
 /* skeleton shimmer */
 .skeleton{background:linear-gradient(90deg,var(--panel) 25%,var(--panel2) 50%,var(--panel) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}

@@ -87,6 +87,37 @@ Profiles are configurable in the **MIXES** screen: cadence, count, new/library b
 
 Requires: Navidrome credentials in `config.json` (or the Setup screen) + some listening history in Navidrome.
 
+### Follow Artists / NEW RELEASES
+
+The **Follows** screen lets you subscribe to specific artists by MusicBrainz ID. Once followed, the server automatically detects their new releases and downloads them.
+
+**How it works:**
+
+1. Search for an artist by name on the Follows screen — candidates come from MusicBrainz with disambiguation text so you can pick the right one.
+2. Click **Follow**. The server immediately runs a one-time backfill: any release from that artist within the last `default_backfill_days` days is queued for download.
+3. Nightly (at `run_hour`), the server polls the ListenBrainz fresh-releases feed for the past `lookback_days` days, finds releases from your followed artists, and downloads new tracks.
+4. Downloaded tracks are collected into the **NEW RELEASES** playlist (an `.m3u` file in your library, capped at `playlist_cap` entries — oldest fall off as new ones arrive).
+5. New releases appear in the in-app feed on the Follows screen. The nav badge shows the unseen count; opening the screen clears it.
+
+**Scope rule:** Singles and EPs → every track is downloaded. Albums → one representative track (the title track if it exists, otherwise the first track).
+
+**Retry:** if a track cannot be resolved on the first attempt, it is retried on the next two nightly runs. After three failures it is marked unavailable.
+
+**`config.json` keys (under `"follow"`):**
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable/disable the nightly follow check |
+| `run_hour` | `4` | Hour (0–23, local time) to run the nightly check |
+| `lookback_days` | `7` | How many past days the ListenBrainz feed covers |
+| `default_backfill_days` | `30` | How far back to look when an artist is first followed |
+| `playlist_name` | `"NEW RELEASES"` | Name of the M3U playlist written to your library |
+| `playlist_cap` | `100` | Maximum entries in the playlist (sliding window) |
+| `notify.webhook_url` | `""` | Optional webhook URL — receives JSON `{count, tracks, message}` |
+| `notify.ntfy_topic` | `""` | Optional [ntfy](https://ntfy.sh/) topic for push notifications |
+
+All keys can also be edited live from the Follows screen's settings panel without touching `config.json`.
+
 ### Add songs to a playlist
 
 The browser extension can track a list of playlist names. Pick one before sending a song and the track is appended to that playlist automatically. Navidrome picks it up on its next scan.
