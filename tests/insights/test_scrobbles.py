@@ -1,5 +1,7 @@
 """Tests for insights/scrobbles.py — parsing and incremental sync."""
 
+from unittest.mock import MagicMock
+
 from insights import db, scrobbles
 
 
@@ -75,9 +77,6 @@ def test_parse_skips_empty_artist():
          "mbid": "", "date": {"uts": "500"}},
     ]}}
     assert scrobbles.parse_recent_tracks(page) == []
-
-
-from unittest.mock import MagicMock
 
 
 def test_insert_scrobbles_dedups_on_primary_key(tmp_path):

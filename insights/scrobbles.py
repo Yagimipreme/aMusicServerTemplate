@@ -80,6 +80,11 @@ def sync_scrobbles(client, username: str, conn, *, page_limit: int = 200,
     Resumes from sync_state['last_ts'] using the API's `from` filter, and
     relies on INSERT OR IGNORE to dedup the boundary play. Returns
     {"inserted", "pages", "last_ts"}.
+
+    If client.call raises mid-sync, rows committed so far are kept but
+    last_ts is only written after a clean run, so the next sync re-fetches
+    already-stored rows (INSERT OR IGNORE deduplicates them). The client's
+    built-in rate limiter throttles large backfills.
     """
     from insights import db
 
