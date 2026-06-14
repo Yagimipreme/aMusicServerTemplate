@@ -1396,6 +1396,8 @@ def insights_discovery():
         return jsonify({
             "overlap": analytics.library_overlap(conn, period=period, tz_offset_min=tz),
             "missing_favorites": analytics.missing_favorites(conn, period=period, tz_offset_min=tz),
+            "discovery_rate": analytics.discovery_rate(conn, period=period, tz_offset_min=tz),
+            "new_vs_repeat": analytics.new_vs_repeat(conn, period=period, tz_offset_min=tz),
         })
     finally:
         conn.close()

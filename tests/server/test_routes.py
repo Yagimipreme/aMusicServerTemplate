@@ -1085,3 +1085,5 @@ def test_insights_discovery_endpoint(client, monkeypatch, tmp_path):
     assert "overlap" in body and "missing_favorites" in body
     assert body["overlap"]["tracks_in_library"] == 1
     assert body["missing_favorites"][0]["track"] == "t2"
+    assert "discovery_rate" in body and "new_vs_repeat" in body
+    assert body["new_vs_repeat"]["first"] + body["new_vs_repeat"]["repeat"] == 3

@@ -1803,6 +1803,16 @@ async function renderInsights() {
       cap.append(acq);
       sD.append(cap);
     }
+    const nvr = disc.new_vs_repeat;
+    const nvrTot = (nvr.first + nvr.repeat) || 1;
+    const nvrStat = document.createElement('div'); nvrStat.className = 'ins-cov';
+    nvrStat.textContent = `${(nvr.first / nvrTot * 100).toFixed(0)}% of your plays are first-listens`;
+    sD.append(nvrStat);
+    if (disc.discovery_rate.length) {
+      sD.append(_chartCard('New artists discovered over time',
+        lineChart(disc.discovery_rate.map(d => d.new_artists),
+          {labels: disc.discovery_rate.map(d => d.date)})));
+    }
     body.append(sD);
   }
 }
