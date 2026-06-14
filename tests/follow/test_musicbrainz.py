@@ -64,3 +64,56 @@ def test_get_release_tracks_parses():
 def test_get_release_tracks_empty_when_no_releases():
     client = mb.MusicBrainzClient(session=FakeSession([{"releases": []}]), min_interval=0)
     assert client.get_release_tracks("rg-x") == []
+
+
+def test_search_artist_escapes_lucene_specials():
+    """Double-quote and backslash in artist name must be escaped before interpolation."""
+    payload = {"artists": []}
+    session = FakeSession([payload])
+    client = mb.MusicBrainzClient(session=session, min_interval=0)
+    client.search_artist('The "Band"', limit=1)
+    _, params = session.calls[0]
+    query = params["query"]
+    # The outer quotes delimit the field value; inner quotes must be escaped as \"
+    assert '\\"' in query, f"Expected escaped quote in query, got: {query!r}"
+    # No raw unescaped double-quote may appear inside the field value
+    # Strip the outer wrapping artist:"..." to check the inner content
+    assert query == r'artist:"The \"Band\""', f"Unexpected query: {query!r}"
+
+
+def test_search_artist_escapes_backslash():
+    """Backslash in artist name must be escaped as \\\\ before the quote escaping."""
+    payload = {"artists": []}
+    session = FakeSession([payload])
+    client = mb.MusicBrainzClient(session=session, min_interval=0)
+    client.search_artist('AC\\DC', limit=1)
+    _, params = session.calls[0]
+    query = params["query"]
+    assert query == r'artist:"AC\\DC"', f"Unexpected query: {query!r}"
+
+
+def test_search_recording_parses():
+    payload = {"recordings": [
+        {"id": "rec-1", "score": 100, "title": "Teardrop",
+         "artist-credit": [{"name": "Massive Attack",
+                            "artist": {"id": "art-1", "name": "Massive Attack"}}],
+         "releases": [
+            {"id": "rel-1", "title": "Mezzanine", "date": "1998-04-20",
+             "status": "Official",
+             "release-group": {"id": "rg-1", "primary-type": "Album"}},
+         ]},
+    ]}
+    client = mb.MusicBrainzClient(session=FakeSession([payload]), min_interval=0)
+    got = client.search_recording("Massive Attack", "Teardrop")
+    assert got[0]["mbid"] == "rec-1"
+    assert got[0]["score"] == 100
+    assert got[0]["artist_mbid"] == "art-1"
+    assert got[0]["artist_name"] == "Massive Attack"
+    assert got[0]["releases"][0] == {
+        "mbid": "rel-1", "title": "Mezzanine", "date": "1998-04-20",
+        "rg_mbid": "rg-1", "primary_type": "Album", "status": "Official"}
+
+
+def test_search_recording_empty_when_no_recordings():
+    client = mb.MusicBrainzClient(session=FakeSession([{"recordings": []}]), min_interval=0)
+    assert client.search_recording("X", "Y") == []

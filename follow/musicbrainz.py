@@ -55,7 +55,8 @@ class MusicBrainzClient:
             raise MBTimeout(f"MusicBrainz network error: {exc}") from exc
 
     def search_artist(self, name: str, limit: int = 5) -> list:
-        data = self._get("artist", {"query": f'artist:"{name}"', "limit": limit})
+        escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+        data = self._get("artist", {"query": f'artist:"{escaped}"', "limit": limit})
         out = []
         for a in data.get("artists", []) or []:
             out.append({
