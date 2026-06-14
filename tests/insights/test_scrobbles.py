@@ -67,3 +67,11 @@ def test_parse_empty_page_returns_empty_list():
 def test_total_pages_reads_attr():
     assert scrobbles.total_pages(_PAGE) == 3
     assert scrobbles.total_pages({}) == 1
+
+
+def test_parse_skips_empty_artist():
+    page = {"recenttracks": {"track": [
+        {"artist": {"#text": ""}, "name": "Orphan", "album": {"#text": ""},
+         "mbid": "", "date": {"uts": "500"}},
+    ]}}
+    assert scrobbles.parse_recent_tracks(page) == []

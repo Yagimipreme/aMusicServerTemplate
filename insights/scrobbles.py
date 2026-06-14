@@ -5,6 +5,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _clean(v: "str | None") -> "str | None":
+    return (v or "").strip() or None
+
+
 def parse_recent_tracks(data: dict) -> list[dict]:
     """Parse one user.getRecentTracks JSON page into scrobble rows.
 
@@ -28,12 +32,14 @@ def parse_recent_tracks(data: dict) -> list[dict]:
         artist = t.get("artist") or {}
         album = t.get("album") or {}
 
-        def _clean(v):
-            return (v or "").strip() or None
+        artist_name = (artist.get("#text") or artist.get("name") or "").strip()
+        if not artist_name:
+            logger.warning("parse_recent_tracks: skipping scrobble with empty artist at ts=%s", uts)
+            continue
 
         rows.append({
             "ts": int(uts),
-            "artist": (artist.get("#text") or artist.get("name") or "").strip(),
+            "artist": artist_name,
             "track": (t.get("name") or "").strip(),
             "album": _clean(album.get("#text")),
             "artist_mbid": _clean(artist.get("mbid")),
