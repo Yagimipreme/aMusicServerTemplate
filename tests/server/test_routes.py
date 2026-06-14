@@ -1061,3 +1061,27 @@ def test_enrich_fields_explicit_block_passthrough():
     from sWebExt.py_server import server as srv
     block = {"fields": {"genre": {"enabled": False, "only_missing": True}}}
     assert srv._enrich_fields(block) == block["fields"]
+
+
+# ── Insights discovery route ──────────────────────────────────────────────────
+
+def _seed_discovery_db(path):
+    from insights import db as idb
+    conn = idb.connect(path)
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track) VALUES (?, ?, ?)",
+        [(1700000000, "A", "t1"), (1700000001, "B", "t2"), (1700000002, "B", "t2")])
+    conn.execute("INSERT INTO library_tracks (artist, track) VALUES ('a', 't1')")
+    conn.commit(); conn.close()
+
+
+def test_insights_discovery_endpoint(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as server
+    dbp = str(tmp_path / "i.db"); _seed_discovery_db(dbp)
+    monkeypatch.setattr(server, "_insights_db_path", lambda: dbp)
+    resp = client.get("/insights/discovery?tz=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "overlap" in body and "missing_favorites" in body
+    assert body["overlap"]["tracks_in_library"] == 1
+    assert body["missing_favorites"][0]["track"] == "t2"

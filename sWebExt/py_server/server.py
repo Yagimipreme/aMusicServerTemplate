@@ -735,6 +735,10 @@ def _run_insights_sync_once(max_pages=None) -> dict:
                         len(artists))
             tagged = ensure_artist_tags(lfm, conn, artists)
             synced["artists_tagged"] = tagged
+            from insights.library_index import index_library
+            song_dir = cfg.get("song_dir", "")
+            if song_dir:
+                synced["library_tracks"] = index_library(conn, song_dir)
         finally:
             conn.close()
         result = {"status": "ok", **synced}
@@ -1378,6 +1382,20 @@ def insights_features():
             "mood_distribution": analytics.mood_distribution(conn, period=period, tz_offset_min=tz),
             "mood_by_time": analytics.mood_by_time(conn, period=period, tz_offset_min=tz),
             "coverage": analytics.feature_coverage(conn, period=period, tz_offset_min=tz),
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/insights/discovery", methods=["GET"])
+def insights_discovery():
+    from insights import db as insights_db, analytics
+    period, tz = _insights_query_args()
+    conn = insights_db.connect(_insights_db_path())
+    try:
+        return jsonify({
+            "overlap": analytics.library_overlap(conn, period=period, tz_offset_min=tz),
+            "missing_favorites": analytics.missing_favorites(conn, period=period, tz_offset_min=tz),
         })
     finally:
         conn.close()
