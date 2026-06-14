@@ -438,11 +438,8 @@ def overview(conn, period="all", tz_offset_min=0, now_ts=None):
         f"COUNT(DISTINCT artist || char(31) || track) AS tracks, "
         f"MIN(ts) AS lo, MAX(ts) AS hi FROM scrobbles {clause}", params).fetchone()
     tg = top_genres(conn, period=period, tz_offset_min=tz_offset_min, now_ts=now_ts, limit=1)
-    avg_bpm_row = conn.execute(
-        f"SELECT AVG(f.bpm) AS a FROM scrobbles s "
-        f"JOIN track_features f ON f.artist = s.artist AND f.track = s.track "
-        f"WHERE f.bpm IS NOT NULL" + (f" AND s.{where}" if where else ""), params
-    ).fetchone()
+    fwhere, fparams = _feature_where(period, now_ts, require="f.bpm IS NOT NULL")
+    avg_bpm_row = conn.execute(f"SELECT AVG(f.bpm) AS a {fwhere}", fparams).fetchone()
     avg_bpm = round(avg_bpm_row["a"], 1) if avg_bpm_row["a"] is not None else None
     return {
         "total_scrobbles": row["total"],

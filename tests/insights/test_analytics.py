@@ -241,6 +241,8 @@ def test_all_analytics_handle_empty_db(tmp_path):
     ov = analytics.overview(conn, now_ts=NOW)
     assert ov["total_scrobbles"] == 0 and ov["top_genre"] is None
     assert ov["first_ts"] is None and ov["est_listening_seconds"] == 0
+    assert ov["avg_bpm"] is None
+    assert ov["feature_coverage"]["tracks_total"] == 0
 
 
 def _seed_with_features(conn, scrobble_rows, track_features):
