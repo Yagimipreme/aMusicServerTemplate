@@ -28,6 +28,21 @@ _LOG_DIR      = os.path.join(_PROJECT_ROOT, "logs")
 _TEMPLATE_DIR = os.path.join(_PROJECT_ROOT, "web", "templates")
 _STATIC_DIR   = os.path.join(_PROJECT_ROOT, "web", "static")
 
+# ── Follow feature paths + defaults ──────────────────────────────────────────
+
+_FOLLOWS_PATH = os.path.join(_PROJECT_ROOT, "follows.json")
+_FOLLOW_STATE_PATH = os.path.join(_PROJECT_ROOT, "follow_state.json")
+
+_FOLLOW_DEFAULTS = {
+    "enabled": True,
+    "run_hour": 4,
+    "lookback_days": 7,
+    "default_backfill_days": 30,
+    "playlist_name": "NEW RELEASES",
+    "playlist_cap": 100,
+    "notify": {"webhook_url": "", "ntfy_topic": ""},
+}
+
 # Resolve yt-dlp once at startup: prefer the venv's copy so it's always found
 # even when the server is started from a shell without the venv activated.
 _YT_DLP = shutil.which("yt-dlp") or os.path.join(os.path.dirname(sys.executable), "yt-dlp")
@@ -141,6 +156,30 @@ def _build_discover_deps():
         song_dir=song_dir,
         lastfm_client=lastfm_client,
     )
+
+
+def _build_follow_clients():
+    """Return (mb_client, lb_client) or (None, None) if requests unavailable."""
+    from follow.musicbrainz import MusicBrainzClient
+    from follow.listenbrainz import ListenBrainzClient
+    return MusicBrainzClient(), ListenBrainzClient()
+
+
+def _run_follow_once() -> dict:
+    from follow import store, fstate, runner
+    deps = _build_discover_deps()
+    if deps is None:
+        return {"status": "disabled", "reason": "navidrome creds missing"}
+    mb, lb = _build_follow_clients()
+    follows = store.list_follows(_FOLLOWS_PATH)
+    state = fstate.load(_FOLLOW_STATE_PATH)
+    fc = _follow_cfg()
+    result = runner.run_once(
+        mb_client=mb, lb_client=lb, follows=follows, state=state,
+        search_fn=deps.search_fn, download_fn=deps.download_fn,
+        song_dir=deps.song_dir, cfg=fc)
+    logger.info("[FOLLOW] run complete: %s", result)
+    return {"status": "ok", **result}
 
 
 def _run_discover_once():
@@ -409,6 +448,47 @@ def _mix_scheduler_loop():
                     logger.info("[MIXES] %s was busy, will retry next cycle", m["id"])
         except Exception:
             logger.exception("[MIXES] scheduler iteration failed; retrying in 3600s")
+            time.sleep(3600)
+
+
+# ── Follow scheduler ──────────────────────────────────────────────────────────
+
+_follow_wake = threading.Event()
+
+
+def _follow_next_run(now: datetime.datetime, run_hour: int) -> datetime.datetime:
+    run_hour = max(0, min(23, int(run_hour)))
+    candidate = now.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += datetime.timedelta(days=1)
+    return candidate
+
+
+def _follow_scheduler_loop():
+    while True:
+        try:
+            fc = _follow_cfg()
+            now = datetime.datetime.now()
+            if not fc.get("enabled", True):
+                _follow_wake.wait(3600)
+                _follow_wake.clear()
+                continue
+            nxt = _follow_next_run(now, fc.get("run_hour", 4))
+            # persist next_run for UI
+            try:
+                from follow import fstate
+                st = fstate.load(_FOLLOW_STATE_PATH)
+                st.set_runs(next_run=nxt.isoformat())
+                st.save()
+            except Exception:
+                logger.warning("[FOLLOW] could not persist next_run", exc_info=True)
+            _follow_wake.wait(max(1.0, (nxt - now).total_seconds()))
+            _follow_wake.clear()
+            now = datetime.datetime.now()
+            if _follow_cfg().get("enabled", True) and now >= nxt:
+                _run_follow_once()
+        except Exception:
+            logger.exception("[FOLLOW] scheduler iteration failed; retry in 3600s")
             time.sleep(3600)
 
 
@@ -731,6 +811,16 @@ def _get_config() -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def _follow_cfg() -> dict:
+    cfg = _get_config()
+    fc = dict(_FOLLOW_DEFAULTS)
+    fc.update(cfg.get("follow") or {})
+    notify = dict(_FOLLOW_DEFAULTS["notify"])
+    notify.update((cfg.get("follow") or {}).get("notify") or {})
+    fc["notify"] = notify
+    return fc
 
 
 def _get_hostname() -> str:
@@ -1771,6 +1861,9 @@ def start_background_server(port: int = 5000):
 
     t_mix = threading.Thread(target=_mix_scheduler_loop, daemon=True)
     t_mix.start()
+
+    t_follow = threading.Thread(target=_follow_scheduler_loop, daemon=True)
+    t_follow.start()
 
     from discover.config import load_config as _load_cfg
     _cfg_at_start = _load_cfg(_CONFIG_PATH)
