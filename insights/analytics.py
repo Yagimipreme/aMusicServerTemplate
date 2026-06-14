@@ -108,3 +108,131 @@ def plays_over_time(conn, period="all", tz_offset_min=0, now_ts=None):
         params,
     ).fetchall()
     return [{"date": r["d"], "plays": r["n"]} for r in rows]
+
+
+_GENRE_JOIN = (
+    "FROM scrobbles s JOIN artist_tags a ON a.artist = s.artist "
+    "WHERE a.primary_genre IS NOT NULL"
+)
+
+
+def _genre_where(period, now_ts):
+    """Genre-join WHERE clause + params (always filters NULL genre, plus period)."""
+    frag, params = _period_where(period, now_ts)
+    where = _GENRE_JOIN
+    if frag:
+        where += f" AND s.{frag}"
+    return where, params
+
+
+def top_genres(conn, period="all", tz_offset_min=0, now_ts=None, limit=15):
+    """Ranked genres with play share. [{"genre", "plays", "share"}]."""
+    where, params = _genre_where(period, now_ts)
+    rows = conn.execute(
+        f"SELECT a.primary_genre AS g, COUNT(*) AS n {where} "
+        f"GROUP BY g ORDER BY n DESC LIMIT ?",
+        params + [limit],
+    ).fetchall()
+    total = sum(r["n"] for r in rows)
+    return [
+        {"genre": r["g"], "plays": r["n"], "share": (r["n"] / total) if total else 0.0}
+        for r in rows
+    ]
+
+
+def _top_genre_names(conn, where, params, top_n):
+    rows = conn.execute(
+        f"SELECT a.primary_genre AS g, COUNT(*) AS n {where} "
+        f"GROUP BY g ORDER BY n DESC LIMIT ?",
+        params + [top_n],
+    ).fetchall()
+    return [r["g"] for r in rows]
+
+
+def genre_by_hour(conn, period="all", tz_offset_min=0, now_ts=None, top_n=8):
+    """Per-local-hour genre composition for the top_n genres.
+
+    Returns {"genres": [...], "data": {genre: [24 counts]}}.
+    """
+    where, params = _genre_where(period, now_ts)
+    genres = _top_genre_names(conn, where, params, top_n)
+    data = {g: [0] * 24 for g in genres}
+    if not genres:
+        return {"genres": [], "data": {}}
+    placeholders = ",".join("?" for _ in genres)
+    rows = conn.execute(
+        f"SELECT a.primary_genre AS g, {_hour_expr(tz_offset_min)} AS h, COUNT(*) AS n "
+        f"{where} AND a.primary_genre IN ({placeholders}) GROUP BY g, h",
+        params + genres,
+    ).fetchall()
+    for r in rows:
+        data[r["g"]][int(r["h"])] = r["n"]
+    return {"genres": genres, "data": data}
+
+
+def genre_diversity(conn, period="all", tz_offset_min=0, now_ts=None):
+    """Distinct genre count + Shannon entropy (raw and normalized to [0,1])."""
+    where, params = _genre_where(period, now_ts)
+    rows = conn.execute(
+        f"SELECT a.primary_genre AS g, COUNT(*) AS n {where} GROUP BY g",
+        params,
+    ).fetchall()
+    counts = [r["n"] for r in rows]
+    total = sum(counts)
+    distinct = len(counts)
+    if total == 0 or distinct <= 1:
+        return {"distinct": distinct, "entropy": 0.0, "normalized_entropy": 0.0}
+    entropy = -sum((c / total) * math.log2(c / total) for c in counts)
+    return {
+        "distinct": distinct,
+        "entropy": entropy,
+        "normalized_entropy": entropy / math.log2(distinct),
+    }
+
+
+def genre_evolution(conn, period="all", tz_offset_min=0, now_ts=None, top_n=6, buckets=6):
+    """Top genres' play share across equal-width time buckets over the data range.
+
+    Returns {"buckets": [labels], "genres": [...], "data": {genre: [share per bucket]}}.
+    """
+    where, params = _genre_where(period, now_ts)
+    span = conn.execute(
+        f"SELECT MIN(s.ts) AS lo, MAX(s.ts) AS hi {where}", params
+    ).fetchone()
+    if span is None or span["lo"] is None:
+        return {"buckets": [], "genres": [], "data": {}}
+    lo, hi = span["lo"], span["hi"]
+    genres = _top_genre_names(conn, where, params, top_n)
+    if not genres or hi == lo:
+        label = f"{_iso_day(lo, tz_offset_min)}"
+        return {"buckets": [label], "genres": genres,
+                "data": {g: [0.0] for g in genres}}
+
+    width = (hi - lo) / buckets
+    placeholders = ",".join("?" for _ in genres)
+    rows = conn.execute(
+        f"SELECT a.primary_genre AS g, s.ts AS ts {where} "
+        f"AND a.primary_genre IN ({placeholders})",
+        params + genres,
+    ).fetchall()
+    totals = [0] * buckets
+    per = {g: [0] * buckets for g in genres}
+    for r in rows:
+        idx = min(buckets - 1, int((r["ts"] - lo) / width))
+        per[r["g"]][idx] += 1
+        totals[idx] += 1
+    data = {
+        g: [(per[g][i] / totals[i]) if totals[i] else 0.0 for i in range(buckets)]
+        for g in genres
+    }
+    labels = [
+        _iso_day(int(lo + width * (i + 0.5)), tz_offset_min) for i in range(buckets)
+    ]
+    return {"buckets": labels, "genres": genres, "data": data}
+
+
+def _iso_day(ts, tz_offset_min):
+    """Local YYYY-MM-DD for a unix ts (helper for bucket labels)."""
+    import datetime as _dt
+    local = ts + _offset_seconds(tz_offset_min)
+    return _dt.datetime.utcfromtimestamp(local).strftime("%Y-%m-%d")

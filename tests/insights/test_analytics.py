@@ -72,3 +72,68 @@ def test_hour_day_heatmap_tz_crosses_midnight(tmp_path):
     hm = analytics.hour_day_heatmap(conn, period="all", tz_offset_min=60, now_ts=NOW)
     assert hm["matrix"][3][0] == 1   # Wednesday, hour 0 (local)
     assert hm["matrix"][2][23] == 0  # NOT Tuesday hour 23 anymore
+
+
+def _seed_with_genres(conn, scrobble_rows, artist_genre):
+    conn.executemany(
+        "INSERT INTO scrobbles (ts, artist, track) VALUES (?, ?, ?)", scrobble_rows)
+    for artist, genre in artist_genre.items():
+        conn.execute(
+            "INSERT INTO artist_tags (artist, tags_json, primary_genre, fetched_at) "
+            "VALUES (?, '[]', ?, 1)", (artist, genre))
+    conn.commit()
+
+
+def test_top_genres_ranks_with_share(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(
+        conn,
+        [(1700000000, "A", "t1"), (1700000001, "A", "t2"), (1700000002, "B", "t3")],
+        {"A": "techno", "B": "house"},
+    )
+    tg = analytics.top_genres(conn, period="all", tz_offset_min=0, now_ts=NOW, limit=10)
+    assert tg[0]["genre"] == "techno"
+    assert tg[0]["plays"] == 2
+    assert abs(tg[0]["share"] - 2 / 3) < 1e-6
+
+
+def test_top_genres_excludes_untagged(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(conn, [(1700000000, "A", "t1"), (1700000001, "C", "t2")],
+                      {"A": "techno"})
+    tg = analytics.top_genres(conn, period="all", tz_offset_min=0, now_ts=NOW, limit=10)
+    assert [g["genre"] for g in tg] == ["techno"]
+
+
+def test_genre_by_hour_shape(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(conn, [(1700000000, "A", "t1")], {"A": "techno"})
+    gbh = analytics.genre_by_hour(conn, period="all", tz_offset_min=0, now_ts=NOW, top_n=5)
+    assert "techno" in gbh["genres"]
+    assert len(gbh["data"]["techno"]) == 24
+    assert gbh["data"]["techno"][22] == 1
+
+
+def test_genre_diversity_counts_distinct_and_entropy(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(
+        conn,
+        [(1700000000, "A", "t1"), (1700000001, "B", "t2")],
+        {"A": "techno", "B": "house"},
+    )
+    div = analytics.genre_diversity(conn, period="all", tz_offset_min=0, now_ts=NOW)
+    assert div["distinct"] == 2
+    assert abs(div["normalized_entropy"] - 1.0) < 1e-6
+
+
+def test_genre_evolution_buckets(tmp_path):
+    conn = db.connect(str(tmp_path / "i.db"))
+    _seed_with_genres(
+        conn,
+        [(NOW - 60 * 86400, "A", "t1"), (NOW - 2 * 86400, "A", "t2")],
+        {"A": "techno"},
+    )
+    ev = analytics.genre_evolution(conn, period="all", tz_offset_min=0, now_ts=NOW, top_n=5)
+    assert "techno" in ev["genres"]
+    assert len(ev["buckets"]) == len(ev["data"]["techno"])
+    assert len(ev["buckets"]) >= 1
