@@ -23,3 +23,8 @@ dist/
 
 # Claude Code worktrees (harness-managed, never commit)
 .claude/worktrees/
+
+# Listening-insights runtime SQLite store
+insights.db
+insights.db-wal
+insights.db-shm
