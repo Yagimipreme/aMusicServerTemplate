@@ -12,7 +12,7 @@ import time
 logger = logging.getLogger(__name__)
 
 
-def primary_genre_for(tags: list[dict]) -> "str | None":
+def primary_genre_for(tags: list[dict]) -> str | None:
     """Highest-weighted tag name, or None for an empty tag set.
 
     lastfm.tags.get_artist_tags already returns tags sorted by descending
@@ -45,7 +45,7 @@ def ensure_artist_tags(client, conn, artists) -> int:
             continue
         tags = get_artist_tags(client, artist)
         conn.execute(
-            "INSERT OR REPLACE INTO artist_tags "
+            "INSERT OR IGNORE INTO artist_tags "
             "(artist, tags_json, primary_genre, fetched_at) VALUES (?, ?, ?, ?)",
             (artist, json.dumps(tags), primary_genre_for(tags), int(time.time())),
         )
