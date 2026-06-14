@@ -150,3 +150,6 @@ nav button.on .ico{text-shadow:0 0 14px rgba(195,255,61,.7)}
 .ins-empty{color:var(--mut);text-align:center;padding:32px 0}
 .ins-cov{font-size:10px;color:var(--mut);margin-top:6px}
 svg.chart{display:block;max-width:360px;margin:auto}
+.ins-missing{display:flex;justify-content:space-between;padding:4px 0;
+  border-bottom:1px solid var(--line);font-size:12px;color:var(--txt)}
+.ins-missing .plays{color:var(--mut);font-family:'JetBrains Mono',monospace}

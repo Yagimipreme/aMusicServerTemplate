@@ -1774,6 +1774,51 @@ async function renderInsights() {
   const cov = document.createElement('div'); cov.className = 'ins-cov';
   cov.textContent = `BPM/mood known for ${(features.coverage.bpm_pct * 100).toFixed(0)}% of tracks`;
   sS.append(cov); body.append(sS);
+
+  // Discovery
+  let disc;
+  try { disc = await API('/insights/discovery' + q); } catch (e) { disc = null; }
+  if (disc) {
+    const sD = _section('Discovery');
+    const o = disc.overlap;
+    const stat = document.createElement('div'); stat.className = 'ins-cov';
+    stat.textContent = `${(o.plays_pct * 100).toFixed(0)}% of your plays are in your library ` +
+      `(${o.tracks_in_library}/${o.tracks_total} tracks)`;
+    sD.append(stat);
+    if (disc.missing_favorites.length) {
+      const cap = document.createElement('div'); cap.className = 'ins-chart';
+      const t = document.createElement('div'); t.className = 'cap';
+      t.textContent = 'Most-played tracks not in your library';
+      cap.append(t);
+      disc.missing_favorites.slice(0, 15).forEach(m => {
+        const row = document.createElement('div'); row.className = 'ins-missing';
+        const name = document.createElement('span');
+        name.textContent = `${m.artist} — ${m.track}`;
+        const plays = document.createElement('span'); plays.className = 'plays';
+        plays.textContent = `${m.plays}`;
+        row.append(name, plays); cap.append(row);
+      });
+      const acq = document.createElement('button'); acq.textContent = 'Acquire all';
+      acq.onclick = () => _acquireMissing(disc.missing_favorites.slice(0, 15), acq);
+      cap.append(acq);
+      sD.append(cap);
+    }
+    body.append(sD);
+  }
+}
+
+async function _acquireMissing(items, btn) {
+  const orig = btn.textContent; btn.disabled = true; btn.textContent = '…queued';
+  try {
+    await API('/import/tracks', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        playlist_name: 'Insights favourites',
+        tracks: items.map(m => ({artist: m.artist, title: m.track})),
+      })});
+    btn.textContent = '✓ queued';
+  } catch (e) { btn.textContent = '! failed'; }
+  setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 2500);
 }
 
 async function _runSync(postUrl, statusUrl, btn) {
