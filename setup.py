@@ -606,7 +606,7 @@ def main():
     print(f"\nSetup complete! Start the server:")
     print("  Linux/Mac:  python sWebExt/py_server/server.py")
     print("  Windows:    aMusicServer.exe")
-    print(f"\nThen open: http://{hostname_display}:5000/explore")
+    print(f"\nThen open: http://{hostname_display}:5000")
 
 
 if __name__ == "__main__":
