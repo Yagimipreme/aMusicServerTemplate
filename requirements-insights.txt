@@ -1,0 +1,11 @@
+# Optional dependencies for local audio analysis (Insights → audio features).
+#
+# Only needed if you enable insights.enable_local_analysis in config.json AND
+# want BPM/key/mood computed from your local files when AcousticBrainz has no
+# data for a track. Everything else in the app works without these.
+#
+# Install with:  .venv/bin/pip install -r requirements-insights.txt
+#
+# NOTE: this pulls a heavy native stack (numpy, scipy, numba, soundfile). It is
+# deliberately excluded from the bundled Windows .exe (see windows/musicserver.spec).
+librosa==0.11.0

@@ -80,5 +80,8 @@
     "playlist_cap": 100,
     "notify": { "webhook_url": "", "ntfy_topic": "" }
   },
+  "insights": {
+    "enable_local_analysis": false
+  },
   "hostname": "amusicserver.local"
 }

@@ -165,6 +165,33 @@ sudo sysctl --system
 
 Downloads still work without this — the server falls back to yt-dlp for SoundCloud.
 
+### Optional: local audio analysis (Insights)
+
+The **Insights → audio features** view (BPM / key / mood) is sourced from
+[AcousticBrainz](https://acousticbrainz.org/) by recording MBID. For tracks
+AcousticBrainz has no data on, the server can fall back to analysing your local
+audio files with [librosa](https://librosa.org/). This is **optional** and off by
+default — without it, those tracks simply show no features.
+
+To enable it:
+
+```bash
+.venv/bin/pip install -r requirements-insights.txt
+```
+
+Then in `config.json`:
+
+```jsonc
+"insights": {
+  "enable_local_analysis": true   // default false
+}
+```
+
+Local analysis also needs `song_dir` set so the server can locate your files.
+The librosa stack (numpy, scipy, numba, soundfile) is heavy and is **not** bundled
+in the Windows `.exe`. If you turn the flag on without installing it, the feature
+sync reports `local_analysis: "unavailable…"` in its status rather than failing.
+
 ---
 
 ## Technical rundown

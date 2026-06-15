@@ -807,14 +807,25 @@ def _run_insights_features_once(max_tracks=200) -> dict:
         cfg = load_config(_CONFIG_PATH)
         enable_local = bool((cfg.get("insights") or {}).get("enable_local_analysis", False))
         local_analyze = None
+        local_status = "disabled"
         if enable_local:
-            from insights.localfeatures import analyze_file
-            song_dir = cfg.get("song_dir", "")
-            index = _build_track_path_index(song_dir) if song_dir else {}
+            # librosa is imported lazily inside analyze_file, so probe it here to
+            # tell an opted-in-but-not-installed user why local analysis is a no-op.
+            try:
+                import librosa  # noqa: F401
+            except ImportError:
+                local_status = ("unavailable — run: "
+                                "pip install -r requirements-insights.txt")
+            else:
+                from insights.localfeatures import analyze_file
+                song_dir = cfg.get("song_dir", "")
+                index = _build_track_path_index(song_dir) if song_dir else {}
 
-            def local_analyze(artist, track, _idx=index):
-                path = _idx.get((artist.lower(), track.lower()))
-                return analyze_file(path) if path else None
+                def local_analyze(artist, track, _idx=index):
+                    path = _idx.get((artist.lower(), track.lower()))
+                    return analyze_file(path) if path else None
+
+                local_status = "enabled"
 
         conn = insights_db.connect(_insights_db_path())
         try:
@@ -823,7 +834,7 @@ def _run_insights_features_once(max_tracks=200) -> dict:
                 local_analyze=local_analyze, limit=max_tracks)
         finally:
             conn.close()
-        result = {"status": "ok", "processed": n}
+        result = {"status": "ok", "processed": n, "local_analysis": local_status}
         logger.info("[INSIGHTS] feature sync complete: %s", result)
         _insights_features_last_result = result
         return result
