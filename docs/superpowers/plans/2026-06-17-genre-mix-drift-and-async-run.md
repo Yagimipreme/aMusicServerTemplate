@@ -536,6 +536,125 @@ Expected: status goes `running` → `ok` with `acquired > 0`; spot-check the new
 
 ---
 
+### Task 6: Broaden the gate's tag view (whole-branch review finding #1)
+
+**Why:** The gate (`filter_artists_by_genre`) reuses `get_artist_tags`, which truncates to the top-3 tags with weight ≥ 10. An underground genre artist whose target-genre tag ranks 4th or below weight 10 is wrongly dropped — defeating the design's "rescue underground phonk" goal. Fix: give the gate a broader tag view (more tags, weight floor 1) without changing `get_artist_tags`' defaults for its other callers (`library/enrich.py`, `insights/genres.py`, `sWebExt/py_server/server.py`, and `tests/lastfm/test_tags.py`).
+
+**Files:**
+- Modify: `lastfm/tags.py` (parameterize `_clean_tags` and `get_artist_tags`)
+- Modify: `discover/seeds.py` (gate calls with broader params)
+- Test: `tests/discover/test_seeds.py`, `tests/lastfm/test_tags.py`
+
+**Interfaces:**
+- Produces: `get_artist_tags(client, artist, top_n=_TOP_N, min_weight=_MIN_WEIGHT)` — defaults unchanged (top-3, weight≥10). `filter_artists_by_genre` calls it with `top_n=25, min_weight=1`.
+
+- [ ] **Step 1: Write the failing test (gate keeps low-ranked genre tag)**
+
+Add to `tests/discover/test_seeds.py`:
+
+```python
+def _client_with_weighted_tags(tag_map):
+    """tag_map: {artist: [(tag, count), ...]} -> fake lastfm client."""
+    def call(method, **kwargs):
+        if method == "artist.getTopTags":
+            name = kwargs.get("artist")
+            pairs = tag_map.get(name, [])
+            return {"toptags": {"tag": [{"name": t, "count": c} for t, c in pairs]}}
+        return {}
+    return SimpleNamespace(call=call)
+
+
+def test_gate_keeps_artist_with_low_ranked_genre_tag():
+    # "phonk" is 4th AND below weight 10 — old top-3/weight-10 view dropped it.
+    client = _client_with_weighted_tags({
+        "Underground": [("memphis", 50), ("trap", 40), ("lo-fi", 20), ("phonk", 8)]
+    })
+    artists = [{"id": "-1", "name": "Underground"}]
+    assert len(filter_artists_by_genre(client, artists, ["phonk"])) == 1
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `.venv/bin/python -m pytest tests/discover/test_seeds.py::test_gate_keeps_artist_with_low_ranked_genre_tag -v`
+Expected: FAIL (current gate uses top-3/weight-10 → "phonk" at rank 4, weight 8 is excluded → artist dropped → len 0).
+
+- [ ] **Step 3: Parameterize `_clean_tags` and `get_artist_tags`**
+
+In `lastfm/tags.py`, change `_clean_tags` signature + the two filter/truncate lines:
+
+```python
+def _clean_tags(raw_tags, top_n: int = _TOP_N, min_weight: int = _MIN_WEIGHT) -> list[dict]:
+```
+```python
+        if weight < min_weight:
+            continue
+```
+```python
+    result.sort(key=lambda x: -x["weight"])
+    return result[:top_n]
+```
+
+And `get_artist_tags`:
+
+```python
+def get_artist_tags(client, artist: str, top_n: int = _TOP_N, min_weight: int = _MIN_WEIGHT) -> list[dict]:
+```
+```python
+    raw = (data.get("toptags", {}) or {}).get("tag", []) or []
+    return _clean_tags(raw, top_n=top_n, min_weight=min_weight)
+```
+
+(Leave `get_track_tags`' call to `_clean_tags(raw)` as-is — it keeps the defaults.)
+
+- [ ] **Step 4: Point the gate at the broader view**
+
+In `discover/seeds.py`, add constants near the top (after the module docstring/imports) and use them in `filter_artists_by_genre`:
+
+```python
+# Gate tag view: broader than the default top-3/weight-10 so an underground
+# artist whose target-genre tag ranks low still passes the genre gate.
+_GATE_TAG_TOP_N = 25
+_GATE_TAG_MIN_WEIGHT = 1
+```
+```python
+        tag_names = [t["name"] for t in get_artist_tags(
+            lastfm_client, name, top_n=_GATE_TAG_TOP_N, min_weight=_GATE_TAG_MIN_WEIGHT)]
+```
+
+- [ ] **Step 5: Add a defaults-unchanged regression test**
+
+Add to `tests/lastfm/test_tags.py` (confirms other callers' behavior is preserved):
+
+```python
+def test_get_artist_tags_defaults_still_top3_weight10():
+    client = SimpleNamespace(call=lambda method, **kw: {"toptags": {"tag": [
+        {"name": "a", "count": 50}, {"name": "b", "count": 40}, {"name": "c", "count": 30},
+        {"name": "d", "count": 20}, {"name": "lowtag", "count": 5},
+    ]}})
+    names = [t["name"] for t in get_artist_tags(client, "X")]
+    assert names == ["a", "b", "c"]          # top-3 only
+    assert "lowtag" not in names             # weight 5 < 10 excluded
+```
+
+(If `SimpleNamespace` isn't imported in `tests/lastfm/test_tags.py`, add `from types import SimpleNamespace`.)
+
+- [ ] **Step 6: Run the affected suites**
+
+Run: `.venv/bin/python -m pytest tests/discover/test_seeds.py tests/lastfm/test_tags.py -v`
+Expected: PASS (new gate test, new defaults test, and all existing tag/gate tests).
+
+Then full discover + lastfm: `.venv/bin/python -m pytest tests/discover/ tests/lastfm/ -q`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add lastfm/tags.py discover/seeds.py tests/discover/test_seeds.py tests/lastfm/test_tags.py
+git commit -m "fix(discover): widen genre-gate tag view so low-ranked genre tags still match"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
