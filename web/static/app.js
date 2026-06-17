@@ -359,29 +359,48 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
 
   // RUN button (not for new cards without a saved id)
   if (!isNew) {
+    let mixPollTimer = null;
     const runBtn = document.createElement('button');
     runBtn.className = 'btn run';
     runBtn.textContent = '▶ run now';
-    runBtn.onclick = async () => {
+
+    function pollMix() {
+      if (mixPollTimer) clearInterval(mixPollTimer);
+      statusLine.style.display = '';
+      statusLine.textContent = 'Running…';
       runBtn.disabled = true;
-      runBtn.textContent = '…';
+      runBtn.textContent = 'running';
+      mixPollTimer = setInterval(async () => {
+        try {
+          const s = await API('/mixes/' + encodeURIComponent(mix.id) + '/status');
+          if (s.status === 'running' || s.status === 'started') {
+            statusLine.textContent = 'Running…';
+            return;
+          }
+          clearInterval(mixPollTimer); mixPollTimer = null;
+          runBtn.disabled = false; runBtn.textContent = '▶ run now';
+          if (s.status === 'error') {
+            statusLine.textContent = 'Error: ' + (s.error || 'run failed');
+          } else if (s.status === 'busy' || s.status === 'disabled') {
+            statusLine.textContent = s.status + (s.reason ? ': ' + s.reason : '');
+          } else {
+            const parts = [];
+            if (s.acquired !== undefined) parts.push('acquired: ' + s.acquired);
+            if (s.library_added !== undefined) parts.push('added: ' + s.library_added);
+            statusLine.textContent = 'Done. ' + (parts.join(', ') || (s.status || 'ok'));
+          }
+        } catch(e) { /* transient — keep polling */ }
+      }, 3000);
+    }
+
+    runBtn.onclick = async () => {
       statusLine.style.display = '';
       statusLine.textContent = 'Starting run…';
       try {
-        const result = await API('/mixes/' + encodeURIComponent(mix.id) + '/run', {method: 'POST'});
-        const parts = [];
-        if (result.acquired !== undefined) parts.push('acquired: ' + result.acquired);
-        if (result.library_added !== undefined) parts.push('added: ' + result.library_added);
-        statusLine.textContent = 'Done. ' + (parts.join(', ') || JSON.stringify(result));
+        await API('/mixes/' + encodeURIComponent(mix.id) + '/run', {method: 'POST'});
+        pollMix();  // 'started' or 'running' — begin polling either way
       } catch(e) {
-        if (e.status === 409) {
-          statusLine.textContent = 'Busy — another run in progress.';
-        } else {
-          statusLine.textContent = 'Error: ' + (e.message || 'unknown');
-        }
-      } finally {
-        runBtn.disabled = false;
-        runBtn.textContent = '▶ run now';
+        statusLine.textContent = 'Error: ' + (e.message || 'unknown');
       }
     };
     actions.appendChild(runBtn);
