@@ -2,6 +2,26 @@ from types import SimpleNamespace
 from discover.seeds import collect_seeds, filter_artists_by_genre
 
 
+def _client_with_weighted_tags(tag_map):
+    """tag_map: {artist: [(tag, count), ...]} -> fake lastfm client."""
+    def call(method, **kwargs):
+        if method == "artist.getTopTags":
+            name = kwargs.get("artist")
+            pairs = tag_map.get(name, [])
+            return {"toptags": {"tag": [{"name": t, "count": c} for t, c in pairs]}}
+        return {}
+    return SimpleNamespace(call=call)
+
+
+def test_gate_keeps_artist_with_low_ranked_genre_tag():
+    # "phonk" is 4th AND below weight 10 — old top-3/weight-10 view dropped it.
+    client = _client_with_weighted_tags({
+        "Underground": [("memphis", 50), ("trap", 40), ("lo-fi", 20), ("phonk", 8)]
+    })
+    artists = [{"id": "-1", "name": "Underground"}]
+    assert len(filter_artists_by_genre(client, artists, ["phonk"])) == 1
+
+
 def _client_with_tags(tag_map):
     """tag_map: {artist_name: [tag_str, ...]} -> fake lastfm client."""
     def call(method, **kwargs):

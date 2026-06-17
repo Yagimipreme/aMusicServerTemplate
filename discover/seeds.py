@@ -3,6 +3,11 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Gate tag view: broader than the default top-3/weight-10 so an underground
+# artist whose target-genre tag ranks low still passes the genre gate.
+_GATE_TAG_TOP_N = 25
+_GATE_TAG_MIN_WEIGHT = 1
+
 
 def genre_seed_artists(lastfm_client, genres: list, limit_per_genre: int = 30) -> list:
     """Top Last.fm artists for each tag, merged + deduped: [{'id': '-1', 'name': str}]."""
@@ -41,7 +46,8 @@ def filter_artists_by_genre(lastfm_client, artists, genres):
         name = a.get("name")
         if not name:
             continue
-        tag_names = [t["name"] for t in get_artist_tags(lastfm_client, name)]
+        tag_names = [t["name"] for t in get_artist_tags(
+            lastfm_client, name, top_n=_GATE_TAG_TOP_N, min_weight=_GATE_TAG_MIN_WEIGHT)]
         if any(tok in tname for tok in targets for tname in tag_names):
             kept.append(a)
     return kept
