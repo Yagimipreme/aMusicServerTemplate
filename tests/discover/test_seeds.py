@@ -1,4 +1,61 @@
-from discover.seeds import collect_seeds
+from types import SimpleNamespace
+from discover.seeds import collect_seeds, filter_artists_by_genre
+
+
+def _client_with_tags(tag_map):
+    """tag_map: {artist_name: [tag_str, ...]} -> fake lastfm client."""
+    def call(method, **kwargs):
+        if method == "artist.getTopTags":
+            name = kwargs.get("artist")
+            tags = tag_map.get(name, [])
+            return {"toptags": {"tag": [{"name": t, "count": 100} for t in tags]}}
+        return {}
+    return SimpleNamespace(call=call)
+
+
+def test_gate_keeps_exact_genre_match():
+    client = _client_with_tags({"V21": ["phonk", "electronic"]})
+    artists = [{"id": "-1", "name": "V21"}]
+    assert filter_artists_by_genre(client, artists, ["phonk"]) == artists
+
+
+def test_gate_keeps_genre_variant_substring():
+    # "phonk" token is a substring of "drift phonk"
+    client = _client_with_tags({"OBLXKQ": ["drift phonk", "memphis"]})
+    artists = [{"id": "-1", "name": "OBLXKQ"}]
+    assert len(filter_artists_by_genre(client, artists, ["phonk"])) == 1
+
+
+def test_gate_drops_rap_only_artist():
+    client = _client_with_tags({"SomeRapper": ["rap", "hip-hop", "trap"]})
+    artists = [{"id": "-1", "name": "SomeRapper"}]
+    assert filter_artists_by_genre(client, artists, ["phonk"]) == []
+
+
+def test_gate_is_case_insensitive_and_dedupes_genres():
+    client = _client_with_tags({"V21": ["Phonk"]})  # get_artist_tags lowercases tags
+    artists = [{"id": "-1", "name": "V21"}]
+    # genres list has mixed case duplicates
+    assert len(filter_artists_by_genre(client, artists, ["Phonk", "phonk"])) == 1
+
+
+def test_gate_drops_artist_when_tag_fetch_fails():
+    def call(method, **kwargs):
+        raise RuntimeError("lastfm down")
+    client = SimpleNamespace(call=call)
+    artists = [{"id": "-1", "name": "Whoever"}]
+    assert filter_artists_by_genre(client, artists, ["phonk"]) == []
+
+
+def test_gate_passthrough_when_no_genres():
+    client = _client_with_tags({})
+    artists = [{"id": "-1", "name": "A"}, {"id": "-1", "name": "B"}]
+    assert filter_artists_by_genre(client, artists, []) == artists
+
+
+def test_gate_passthrough_when_no_client():
+    artists = [{"id": "-1", "name": "A"}]
+    assert filter_artists_by_genre(None, artists, ["phonk"]) == artists
 
 
 class FakeSubsonic:
