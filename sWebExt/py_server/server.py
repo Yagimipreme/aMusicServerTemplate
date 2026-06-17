@@ -119,6 +119,7 @@ _insights_features_last_result: dict = {"status": "idle"}
 # ── Discover run state ────────────────────────────────────────────────────────
 
 _discover_running = threading.Lock()
+_mix_last_results: dict = {}   # mix_id -> last run result dict (status polling)
 
 # ── Follow run state ──────────────────────────────────────────────────────────
 
@@ -372,20 +373,30 @@ def _record_last_run(profile_id: str) -> None:
 
 
 def _run_profile_once(profile) -> dict:
+    pid = profile["id"]
+    _mix_last_results[pid] = {"status": "running"}
     if not _discover_running.acquire(blocking=False):
-        return {"status": "busy", "reason": "another discover run in progress"}
+        result = {"status": "busy", "reason": "another discover run in progress"}
+        _mix_last_results[pid] = result
+        return result
     try:
         deps = _build_discover_deps()
         if deps is None:
-            return {"status": "disabled", "reason": "navidrome creds missing"}
+            result = {"status": "disabled", "reason": "navidrome creds missing"}
+            _mix_last_results[pid] = result
+            return result
         from discover.engine import run_profile
         result = run_profile(deps, _get_config(), profile)
-        logger.info("[MIXES] %s run complete: %s", profile["id"], result)
-        _record_last_run(profile["id"])
+        result.setdefault("status", "ok")
+        logger.info("[MIXES] %s run complete: %s", pid, result)
+        _record_last_run(pid)
+        _mix_last_results[pid] = result
         return result
     except Exception as e:
-        logger.exception("[MIXES] %s run failed", profile.get("id"))
-        return {"status": "error", "error": str(e)}
+        logger.exception("[MIXES] %s run failed", pid)
+        result = {"status": "error", "error": str(e)}
+        _mix_last_results[pid] = result
+        return result
     finally:
         _discover_running.release()
 
@@ -1629,12 +1640,16 @@ def mixes_run(mix_id):
     profile = next((m for m in mixes if m["id"] == mix_id), None)
     if profile is None:
         return jsonify({"status": "error", "error": f"mix {mix_id!r} not found"}), 404
-    result = _run_profile_once(profile)
-    if result.get("status") == "busy":
-        return jsonify(result), 409
-    if result.get("status") == "error":
-        return jsonify(result), 500
-    return jsonify(result)
+    if _discover_running.locked():
+        return jsonify({"status": "running"}), 200
+    _mix_last_results[mix_id] = {"status": "running"}
+    threading.Thread(target=_run_profile_once, args=(profile,), daemon=True).start()
+    return jsonify({"status": "started", "mix_id": mix_id}), 202
+
+
+@app.route("/mixes/<mix_id>/status", methods=["GET"])
+def mixes_status(mix_id):
+    return jsonify(_mix_last_results.get(mix_id, {"status": "idle"}))
 
 
 @app.route("/mixes/suggest", methods=["POST"])
