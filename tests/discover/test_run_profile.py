@@ -355,7 +355,14 @@ def test_genre_mode_downloads_only_gated_artists(tmp_path, monkeypatch):
 
 def test_genre_mode_does_not_call_similar_or_listener_floor(tmp_path, monkeypatch):
     monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
-    # fake_call raises if artist.getSimilar / artist.getInfo are hit
     deps, _ = _genre_deps(tmp_path, {"PhonkGuy": ["phonk"]}, ["PhonkGuy"])
+    calls = []
+    original_call = deps.lastfm_client.call
+    def tracking_call(method, **kwargs):
+        calls.append(method)
+        return original_call(method, **kwargs)
+    deps.lastfm_client.call = tracking_call
     profile = make_profile(count=2, cap=10, new_ratio=1.0, mode="genre", genres=["phonk"])
-    run_profile(deps, make_cfg(), profile)  # must not raise AssertionError
+    run_profile(deps, make_cfg(), profile)
+    assert "artist.getSimilar" not in calls
+    assert "artist.getInfo" not in calls
