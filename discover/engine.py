@@ -235,7 +235,9 @@ def run_profile(deps, cfg, profile):
                                       seed_playlist=seeds_cfg.get("playlist", ""))
                 seed_artist_names = [s["name"] for s in seeds if s.get("name")]
         elif mode == "genre":
-            seeds = genre_seed_artists(lastfm_client, seeds_cfg.get("genres") or []) if lastfm_client else []
+            seeds = (genre_seed_artists(lastfm_client, seeds_cfg.get("genres") or [],
+                                        limit_per_genre=60)
+                     if lastfm_client else [])
         elif mode == "manual":
             seeds = [{"id": "-1", "name": a} for a in seeds_cfg.get("artists") or []]
             seed_artist_names = seeds_cfg.get("artists") or []
@@ -245,13 +247,19 @@ def run_profile(deps, cfg, profile):
                                   seed_playlist=seeds_cfg.get("playlist", ""))
             seed_artist_names = [s["name"] for s in seeds if s.get("name")]
         if new_count > 0 and seeds:
-            oversample = int(quality.get("candidate_oversample", 3))
-            artists = expand_similar(deps.subsonic, seeds, per_seed=20, lastfm_client=lastfm_client)
-            if lastfm_client is not None:
-                k = int(quality.get("seed_artist_count", 20)) * oversample
-                artists = sorted(artists, key=lambda a: -a.get("score", 0))[:k]
-                artists = enrich_artist_info(lastfm_client, artists,
-                                             min_listeners=int(quality.get("min_artist_listeners", 5000)))
+            if mode == "genre":
+                from discover.seeds import filter_artists_by_genre
+                artists = filter_artists_by_genre(lastfm_client, seeds,
+                                                  seeds_cfg.get("genres") or [])
+            else:
+                oversample = int(quality.get("candidate_oversample", 3))
+                artists = expand_similar(deps.subsonic, seeds, per_seed=20,
+                                         lastfm_client=lastfm_client)
+                if lastfm_client is not None:
+                    k = int(quality.get("seed_artist_count", 20)) * oversample
+                    artists = sorted(artists, key=lambda a: -a.get("score", 0))[:k]
+                    artists = enrich_artist_info(lastfm_client, artists,
+                                                 min_listeners=int(quality.get("min_artist_listeners", 5000)))
             candidates = resolve_tracks(deps.search_fn, artists, per_artist=1)
             fresh_all = list(filter_fresh(deps.subsonic.song_exists, deps.state, candidates))
             fresh_iter = iter(fresh_all)

@@ -18,6 +18,7 @@ def app():
         srv._enrich_last_result = {"status": "idle"}
         srv._insights_last_result = {"status": "idle"}
         srv._insights_features_last_result = {"status": "idle"}
+        srv._mix_last_results = {}
         flask_app = srv.app
         flask_app.config["TESTING"] = True
         yield flask_app
@@ -451,48 +452,63 @@ def test_delete_mixes_unknown_id_returns_404(client, tmp_path):
     assert resp.status_code == 404
 
 
-def test_post_mixes_run_triggers_run(client, tmp_path):
-    """POST /mixes/<id>/run runs the profile and returns result."""
+def test_post_mixes_run_starts_background_and_returns_202(client, tmp_path):
+    """POST /mixes/<id>/run spawns a background run and returns 202 started."""
     import json as _json
     profile = _make_valid_profile(id="mymix", name="My Mix")
     cfg = {"mixes": [profile]}
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(_json.dumps(cfg))
     with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
-         patch("sWebExt.py_server.server._run_profile_once",
-               return_value={"profile": "mymix", "acquired": 2, "library_added": 0, "m3u": "/tmp/x.m3u"}):
+         patch("sWebExt.py_server.server._discover_running") as lock:
+        lock.locked.return_value = False
+        resp = client.post("/mixes/mymix/run")
+    assert resp.status_code == 202
+    data = _json.loads(resp.data)
+    assert data["status"] == "started"
+    assert data["mix_id"] == "mymix"
+
+
+def test_post_mixes_run_already_running_returns_200_running(client, tmp_path):
+    """POST while a run is in flight → 200 {'status':'running'}, no new thread."""
+    import json as _json
+    profile = _make_valid_profile(id="mymix", name="My Mix")
+    cfg = {"mixes": [profile]}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
+         patch("sWebExt.py_server.server._discover_running") as lock:
+        lock.locked.return_value = True
         resp = client.post("/mixes/mymix/run")
     assert resp.status_code == 200
-    data = _json.loads(resp.data)
-    assert data["acquired"] == 2
+    assert _json.loads(resp.data)["status"] == "running"
 
 
-def test_post_mixes_run_busy_returns_409(client, tmp_path):
-    """POST /mixes/<id>/run returns 409 when busy."""
+def test_post_mixes_run_unknown_id_returns_404(client, tmp_path):
     import json as _json
-    profile = _make_valid_profile(id="mymix", name="My Mix")
-    cfg = {"mixes": [profile]}
     cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(_json.dumps(cfg))
-    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
-         patch("sWebExt.py_server.server._run_profile_once",
-               return_value={"status": "busy", "reason": "another discover run in progress"}):
-        resp = client.post("/mixes/mymix/run")
-    assert resp.status_code == 409
+    cfg_file.write_text(_json.dumps({"mixes": []}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
+        resp = client.post("/mixes/nope/run")
+    assert resp.status_code == 404
 
 
-def test_post_mixes_run_error_returns_500(client, tmp_path):
-    """POST /mixes/<id>/run returns 500 when result.status=='error' (Issue 13)."""
+def test_mixes_status_defaults_idle(client):
     import json as _json
+    resp = client.get("/mixes/whatever/status")
+    assert resp.status_code == 200
+    assert _json.loads(resp.data)["status"] == "idle"
+
+
+def test_run_profile_once_records_status(tmp_path):
+    """_run_profile_once stores its result in _mix_last_results keyed by id."""
+    from sWebExt.py_server import server as srv
+    srv._mix_last_results = {}
     profile = _make_valid_profile(id="mymix", name="My Mix")
-    cfg = {"mixes": [profile]}
-    cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(_json.dumps(cfg))
-    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)), \
-         patch("sWebExt.py_server.server._run_profile_once",
-               return_value={"status": "error", "error": "something broke"}):
-        resp = client.post("/mixes/mymix/run")
-    assert resp.status_code == 500, f"Expected 500 for error status, got {resp.status_code}"
+    with patch("sWebExt.py_server.server._build_discover_deps", return_value=None):
+        srv._run_profile_once(profile)
+    assert "mymix" in srv._mix_last_results
+    assert srv._mix_last_results["mymix"]["status"] in ("disabled", "ok", "error")
 
 
 def test_post_mixes_suggest_appends_new_profiles(client, tmp_path):

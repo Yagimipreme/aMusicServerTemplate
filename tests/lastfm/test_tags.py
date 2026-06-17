@@ -1,5 +1,6 @@
 """Tests for lastfm/tags.py — noise filtering, weight threshold, top-3, artist fallback."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from lastfm.tags import (
@@ -156,3 +157,13 @@ def test_build_genre_profile_noise_tags_not_present():
     ]
     profile = build_genre_profile(tag_sets)
     assert list(profile.keys()) == ["electronic"]
+
+
+def test_get_artist_tags_defaults_still_top3_weight10():
+    client = SimpleNamespace(call=lambda method, **kw: {"toptags": {"tag": [
+        {"name": "a", "count": 50}, {"name": "b", "count": 40}, {"name": "c", "count": 30},
+        {"name": "d", "count": 20}, {"name": "lowtag", "count": 5},
+    ]}})
+    names = [t["name"] for t in get_artist_tags(client, "X")]
+    assert names == ["a", "b", "c"]          # top-3 only
+    assert "lowtag" not in names             # weight 5 < 10 excluded

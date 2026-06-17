@@ -22,7 +22,7 @@ _MIN_WEIGHT = 10  # Last.fm 0–100 scale
 _TOP_N = 3
 
 
-def _clean_tags(raw_tags) -> list[dict]:
+def _clean_tags(raw_tags, top_n: int = _TOP_N, min_weight: int = _MIN_WEIGHT) -> list[dict]:
     """Normalize raw tag list/dict from API response into [{name, weight}, ...]."""
     if isinstance(raw_tags, dict):
         raw_tags = [raw_tags]
@@ -40,12 +40,12 @@ def _clean_tags(raw_tags) -> list[dict]:
             continue
         if name in NOISE_TAGS:
             continue
-        if weight < _MIN_WEIGHT:
+        if weight < min_weight:
             continue
         result.append({"name": name, "weight": weight})
 
     result.sort(key=lambda x: -x["weight"])
-    return result[:_TOP_N]
+    return result[:top_n]
 
 
 def get_track_tags(client, artist: str, title: str) -> list[dict]:
@@ -68,7 +68,7 @@ def get_track_tags(client, artist: str, title: str) -> list[dict]:
     return _clean_tags(raw)
 
 
-def get_artist_tags(client, artist: str) -> list[dict]:
+def get_artist_tags(client, artist: str, top_n: int = _TOP_N, min_weight: int = _MIN_WEIGHT) -> list[dict]:
     """Return top genre tags for an artist.
 
     Returns [] on error.
@@ -85,7 +85,7 @@ def get_artist_tags(client, artist: str) -> list[dict]:
         return []
 
     raw = (data.get("toptags", {}) or {}).get("tag", []) or []
-    return _clean_tags(raw)
+    return _clean_tags(raw, top_n=top_n, min_weight=min_weight)
 
 
 def build_genre_profile(artist_tag_sets: list[list[dict]]) -> dict[str, float]:

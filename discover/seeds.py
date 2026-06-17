@@ -3,6 +3,11 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Gate tag view: broader than the default top-3/weight-10 so an underground
+# artist whose target-genre tag ranks low still passes the genre gate.
+_GATE_TAG_TOP_N = 25
+_GATE_TAG_MIN_WEIGHT = 1
+
 
 def genre_seed_artists(lastfm_client, genres: list, limit_per_genre: int = 30) -> list:
     """Top Last.fm artists for each tag, merged + deduped: [{'id': '-1', 'name': str}]."""
@@ -22,6 +27,30 @@ def genre_seed_artists(lastfm_client, genres: list, limit_per_genre: int = 30) -
                 seen.add(name.lower())
                 out.append({"id": "-1", "name": name})
     return out
+
+
+def filter_artists_by_genre(lastfm_client, artists, genres):
+    """Keep only artists whose Last.fm top tags include a target genre token.
+
+    Token match is casefold substring, so "phonk" keeps an artist tagged
+    "drift phonk" or "phonk, rap" but drops one tagged only "rap, hip-hop".
+    Fail-closed: artists whose tag fetch errors or returns no match are dropped.
+    Returns the input unchanged when genres is empty or lastfm_client is None.
+    """
+    targets = {g.strip().casefold() for g in (genres or []) if g and g.strip()}
+    if not targets or lastfm_client is None:
+        return list(artists)
+    from lastfm.tags import get_artist_tags
+    kept = []
+    for a in artists:
+        name = a.get("name")
+        if not name:
+            continue
+        tag_names = [t["name"] for t in get_artist_tags(
+            lastfm_client, name, top_n=_GATE_TAG_TOP_N, min_weight=_GATE_TAG_MIN_WEIGHT)]
+        if any(tok in tname for tok in targets for tname in tag_names):
+            kept.append(a)
+    return kept
 
 
 def collect_seeds(subsonic, limit: int = 20, lastfm_client=None,
