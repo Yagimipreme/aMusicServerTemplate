@@ -287,7 +287,7 @@ def test_run_profile_ratio_blend_exact_split(tmp_path, monkeypatch):
     ]
     # Use a fake that returns 3 distinct similar artists (Zmajor, Rushex, Nextra)
     deps, downloaded = build_deps(tmp_path, library_songs=library_songs, extra_similar=["Nextra"])
-    profile = make_profile(count=10, cap=50, new_ratio=0.3, mode="genre", genres=["techno"])
+    profile = make_profile(count=10, cap=50, new_ratio=0.3, mode="manual", artists=["SeedArtist"])
     cfg = make_cfg()
     result = run_profile(deps, cfg, profile)
     # new_count = round(10 * 0.3) = 3; lib_count = 7
@@ -306,7 +306,7 @@ def test_run_profile_library_shortfall_backfilled_by_acquisition(tmp_path, monke
     # Need enough similar artists to backfill 6 more (3 default + 6 extra = 9 candidates)
     extra = [f"ExtraArtist{i}" for i in range(7)]
     deps, downloaded = build_deps(tmp_path, library_songs=library_songs, extra_similar=extra)
-    profile = make_profile(count=10, cap=50, new_ratio=0.3, mode="genre", genres=["techno"])
+    profile = make_profile(count=10, cap=50, new_ratio=0.3, mode="manual", artists=["SeedArtist"])
     cfg = make_cfg()
     result = run_profile(deps, cfg, profile)
     total = result["acquired"] + result["library_added"]
@@ -316,3 +316,46 @@ def test_run_profile_library_shortfall_backfilled_by_acquisition(tmp_path, monke
     )
     assert result["library_added"] == 1  # only 1 library track available
     assert result["acquired"] == 9  # 3 original + 6 backfill
+
+
+# ── genre mode: seed-direct + tag gate (no similar expansion) ─────────────────
+
+def _genre_deps(tmp_path, tag_map, top_artists):
+    """Deps whose tag.gettopartists returns top_artists and
+    artist.getTopTags returns tag_map[name]."""
+    deps, downloaded = build_deps(tmp_path)
+
+    def fake_call(method, **kwargs):
+        if method == "tag.gettopartists":
+            return {"topartists": {"artist": [{"name": n} for n in top_artists]}}
+        if method == "artist.getTopTags":
+            name = kwargs.get("artist")
+            return {"toptags": {"tag": [{"name": t, "count": 100}
+                                        for t in tag_map.get(name, [])]}}
+        if method == "artist.getSimilar":
+            raise AssertionError("genre mode must not expand to similar artists")
+        if method == "artist.getInfo":
+            raise AssertionError("genre mode must not apply listener floor")
+        return {}
+
+    deps.lastfm_client.call = fake_call
+    return deps, downloaded
+
+
+def test_genre_mode_downloads_only_gated_artists(tmp_path, monkeypatch):
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    tag_map = {"PhonkGuy": ["phonk"], "RapGuy": ["rap", "hip-hop"]}
+    deps, downloaded = _genre_deps(tmp_path, tag_map, ["PhonkGuy", "RapGuy"])
+    profile = make_profile(count=5, cap=20, new_ratio=1.0, mode="genre", genres=["phonk"])
+    run_profile(deps, make_cfg(), profile)
+    # Only PhonkGuy passes the gate; RapGuy dropped. search_fn url is http://y/<name>
+    assert any("PhonkGuy" in p for p in downloaded)
+    assert not any("RapGuy" in p for p in downloaded)
+
+
+def test_genre_mode_does_not_call_similar_or_listener_floor(tmp_path, monkeypatch):
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    # fake_call raises if artist.getSimilar / artist.getInfo are hit
+    deps, _ = _genre_deps(tmp_path, {"PhonkGuy": ["phonk"]}, ["PhonkGuy"])
+    profile = make_profile(count=2, cap=10, new_ratio=1.0, mode="genre", genres=["phonk"])
+    run_profile(deps, make_cfg(), profile)  # must not raise AssertionError
