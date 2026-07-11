@@ -882,6 +882,7 @@ async function renderSearch() {
     const body = document.createElement('div');
     const state = {profile: null, likes: null};
     const tabs = {};
+    let tabGen = 0;
 
     function setMsg(text) {
       body.textContent = '';
@@ -946,10 +947,12 @@ async function renderSearch() {
         inner.className = 'pl-tracks';
         inner.style.display = 'none';
         let loaded = false;
+        let loading = false;
         row.onclick = async () => {
           if (inner.style.display !== 'none') { inner.style.display = 'none'; return; }
           inner.style.display = '';
-          if (loaded) return;
+          if (loaded || loading) return;
+          loading = true;
           inner.textContent = 'loading…';
           try {
             const data = await API('/sc/set/' + pl.id + '/tracks');
@@ -964,6 +967,8 @@ async function renderSearch() {
             loaded = true;
           } catch (e) {
             inner.textContent = 'failed to load: ' + (e.message || 'unknown');
+          } finally {
+            loading = false;
           }
         };
         wrap.appendChild(row);
@@ -973,14 +978,17 @@ async function renderSearch() {
     }
 
     async function showTab(name) {
+      const gen = ++tabGen;
       Object.entries(tabs).forEach(([n, el]) => el.classList.toggle('on', n === name));
       setMsg('Loading…');
       try {
         if (name === 'tracks') {
           const p = await loadProfile();
+          if (gen !== tabGen) return;
           renderTrackRows(p.tracks, 'No tracks found for this artist.');
         } else if (name === 'playlists') {
           const p = await loadProfile();
+          if (gen !== tabGen) return;
           renderPlaylists(p.sets);
         } else {
           if (!state.likes) {
@@ -988,9 +996,11 @@ async function renderSearch() {
             if (data.status !== 'ok') throw new Error(data.reason || data.error || 'likes unavailable');
             state.likes = data.tracks || [];
           }
+          if (gen !== tabGen) return;
           renderTrackRows(state.likes, 'No likes found.');
         }
       } catch (e) {
+        if (gen !== tabGen) return;
         setMsg('Failed to load: ' + (e.message || 'unknown'));
       }
     }
