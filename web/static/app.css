@@ -163,3 +163,12 @@ svg.chart{display:block;max-width:360px;margin:auto}
 .ap-ext:hover{color:var(--acid);border-color:var(--acid-dim)}
 .pl-row{cursor:pointer}
 .pl-tracks{margin-left:28px;font-family:'JetBrains Mono';font-size:.64rem;color:var(--mut)}
+
+.chip.warn{border-color:#7a5a1a;color:#ffb04d}
+.tag-editor{margin-top:8px;display:flex;flex-direction:column;gap:8px;width:100%}
+.tag-suggest{display:flex;gap:6px;flex-wrap:wrap}
+.tag-btns{display:flex;gap:8px}
+.tag-card{border:1px solid var(--line);border-radius:4px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:.64rem;color:var(--mut)}
+.tag-card .tc-stats{color:var(--acid);margin-bottom:6px}
+.tag-card .tc-similar{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.tag-card .tc-warn{color:#ffb04d;margin-top:8px}

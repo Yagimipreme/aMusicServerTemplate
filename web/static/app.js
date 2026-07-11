@@ -5,6 +5,29 @@ const API = (path, opts) => fetch(path, opts).then(async r => {
   return j;
 });
 
+// ── Genre tag preview helpers ─────────────────────────────────────────────────
+const _tagPreviewCache = {};  // casefolded tag -> Promise<payload>
+function fetchTagPreview(tag) {
+  const key = tag.trim().toLowerCase();
+  if (!_tagPreviewCache[key]) {
+    _tagPreviewCache[key] = API('/genres/preview?tag=' + encodeURIComponent(tag.trim()))
+      .catch(e => { delete _tagPreviewCache[key]; throw e; });
+  }
+  return _tagPreviewCache[key];
+}
+function isWeakTag(p) {
+  return p.status === 'ok' && (p.taggings < 100 || !(p.top_artists || []).length);
+}
+let _genreVocabPromise = null;
+function fetchGenreVocab() {
+  if (!_genreVocabPromise) {
+    _genreVocabPromise = API('/genres/vocab')
+      .then(d => d.tags || [])
+      .catch(e => { _genreVocabPromise = null; return []; });
+  }
+  return _genreVocabPromise;
+}
+
 const screens = {};  // name -> {el, render}
 let _currentScreen = null;
 
@@ -296,19 +319,133 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
       chip.textContent = g + ' ✕';
       chip.onclick = () => { genres.splice(i, 1); renderChips(); };
       chipsDiv.appendChild(chip);
+      fetchTagPreview(g).then(p => {
+        if (isWeakTag(p)) {
+          chip.classList.add('warn');
+          chip.textContent = '⚠ ' + g + ' ✕';
+          chip.title = 'barely used on Last.fm — check the preview';
+        }
+      }).catch(() => {});
     });
     const addChip = document.createElement('span');
     addChip.className = 'chip add';
     addChip.textContent = '+ add';
     addChip.onclick = () => {
-      const g = prompt('Genre:');
-      if (g && g.trim()) { genres.push(g.trim()); renderChips(); }
+      addChip.style.display = 'none';
+      tagEditor.style.display = '';
+      tagInput.focus();
+      fetchGenreVocab();
     };
     chipsDiv.appendChild(addChip);
   }
   renderChips();
   genreRow.appendChild(genreLabel);
   genreRow.appendChild(chipsDiv);
+  // Inline tag editor: input + vocab suggestions + Last.fm preview card
+  const tagEditor = document.createElement('div');
+  tagEditor.className = 'tag-editor';
+  tagEditor.style.display = 'none';
+  const tagInput = document.createElement('input');
+  tagInput.className = 'txt';
+  tagInput.type = 'text';
+  tagInput.placeholder = 'genre tag… (Enter to preview)';
+  const sugDiv = document.createElement('div');
+  sugDiv.className = 'tag-suggest';
+  const cardDiv = document.createElement('div');
+  cardDiv.className = 'tag-card';
+  cardDiv.style.display = 'none';
+  const btnRow = document.createElement('div');
+  btnRow.className = 'tag-btns';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn run';
+  addBtn.textContent = 'ADD';
+  addBtn.disabled = true;
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = 'CANCEL';
+  btnRow.appendChild(addBtn);
+  btnRow.appendChild(cancelBtn);
+  tagEditor.appendChild(tagInput);
+  tagEditor.appendChild(sugDiv);
+  tagEditor.appendChild(cardDiv);
+  tagEditor.appendChild(btnRow);
+  genreRow.appendChild(tagEditor);
+
+  tagInput.oninput = async () => {
+    addBtn.disabled = !tagInput.value.trim();
+    const q = tagInput.value.trim().toLowerCase();
+    sugDiv.textContent = '';
+    if (q.length < 2) return;
+    const vocab = await fetchGenreVocab();
+    if (tagInput.value.trim().toLowerCase() !== q) return;  // stale
+    vocab.filter(t => t.includes(q)).slice(0, 8).forEach(t => {
+      const s = document.createElement('span');
+      s.className = 'chip';
+      s.textContent = t;
+      s.onclick = () => { tagInput.value = t; sugDiv.textContent = ''; addBtn.disabled = false; previewTag(t); };
+      sugDiv.appendChild(s);
+    });
+  };
+  tagInput.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); previewTag(tagInput.value); }
+  };
+
+  async function previewTag(tag) {
+    tag = (tag || '').trim();
+    if (!tag) return;
+    cardDiv.style.display = '';
+    cardDiv.textContent = 'loading preview…';
+    try {
+      const p = await fetchTagPreview(tag);
+      if (tagInput.value.trim().toLowerCase() !== tag.toLowerCase()) return;  // stale
+      cardDiv.textContent = '';
+      if (p.status !== 'ok') { cardDiv.textContent = 'preview unavailable'; return; }
+      const stats = document.createElement('div');
+      stats.className = 'tc-stats';
+      stats.textContent = p.taggings.toLocaleString() + ' taggings on Last.fm';
+      cardDiv.appendChild(stats);
+      const arts = document.createElement('div');
+      arts.textContent = (p.top_artists || []).length
+        ? 'top: ' + p.top_artists.join(', ')
+        : 'no artists found for this tag';
+      cardDiv.appendChild(arts);
+      if ((p.similar || []).length) {
+        const simRow = document.createElement('div');
+        simRow.className = 'tc-similar';
+        p.similar.slice(0, 8).forEach(t => {
+          const s = document.createElement('span');
+          s.className = 'chip';
+          s.textContent = t;
+          s.onclick = () => { tagInput.value = t; addBtn.disabled = false; previewTag(t); };
+          simRow.appendChild(s);
+        });
+        cardDiv.appendChild(simRow);
+      }
+      if (isWeakTag(p)) {
+        const w = document.createElement('div');
+        w.className = 'tc-warn';
+        w.textContent = '⚠ barely used on Last.fm — check the preview';
+        cardDiv.appendChild(w);
+      }
+    } catch (e) {
+      cardDiv.textContent = 'preview unavailable';
+    }
+  }
+
+  function closeTagEditor() {
+    tagEditor.style.display = 'none';
+    tagInput.value = '';
+    sugDiv.textContent = '';
+    cardDiv.style.display = 'none';
+    cardDiv.textContent = '';
+    addBtn.disabled = true;
+    renderChips();
+  }
+  addBtn.onclick = () => {
+    const g = tagInput.value.trim();
+    if (g) { genres.push(g); closeTagEditor(); }
+  };
+  cancelBtn.onclick = closeTagEditor;
   inner.appendChild(genreRow);
 
   // Playlist input row (only when mode=playlist)
