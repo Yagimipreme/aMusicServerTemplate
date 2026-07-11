@@ -73,3 +73,21 @@ def test_get_profile_single_track():
     assert len(result["tracks"]) == 1
     assert result["tracks"][0]["id"] == 7
     assert result["sets"] == []
+
+
+def test_user_from_raw_captures_permalink():
+    from soundcloud.mirror import _user_from_raw
+    user = _user_from_raw({
+        "id": 42, "username": "DJ Foo Bar",
+        "permalink": "djfoobar",
+        "permalink_url": "https://soundcloud.com/djfoobar",
+    })
+    assert user["permalink"] == "djfoobar"
+    assert user["permalink_url"] == "https://soundcloud.com/djfoobar"
+
+
+def test_user_from_raw_permalink_defaults_empty():
+    from soundcloud.mirror import _user_from_raw
+    user = _user_from_raw({"id": 1, "username": "x"})
+    assert user["permalink"] == ""
+    assert user["permalink_url"] == ""
