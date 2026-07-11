@@ -1155,3 +1155,83 @@ def test_insights_discovery_endpoint(client, monkeypatch, tmp_path):
     assert body["missing_favorites"][0]["track"] == "t2"
     assert "discovery_rate" in body and "new_vs_repeat" in body
     assert body["new_vs_repeat"]["first"] + body["new_vs_repeat"]["repeat"] == 3
+
+
+# ── /sc browse routes (set tracks, user likes) ────────────────────────────────
+
+def _fake_sc_track(title="t"):
+    return {"id": 1, "title": title, "artist": "a", "stream_url": "",
+            "permalink_url": "https://soundcloud.com/a/t", "artwork_url": "",
+            "duration_ms": 1000, "source": "sc"}
+
+
+def test_sc_set_tracks_happy_path(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", True)
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=MagicMock()), \
+         patch("soundcloud.mirror.get_set_tracks", return_value=[_fake_sc_track()]) as m:
+        resp = client.get("/sc/set/123/tracks")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["tracks"][0]["title"] == "t"
+    assert m.call_args.args[1] == 123
+
+
+def test_sc_set_tracks_connecting_when_not_ready(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", False)
+    resp = client.get("/sc/set/123/tracks")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "connecting"
+
+
+def test_sc_set_tracks_unavailable_without_client(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", True)
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=None):
+        resp = client.get("/sc/set/123/tracks")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "unavailable"
+
+
+def test_sc_set_tracks_upstream_error_returns_500(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", True)
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=MagicMock()), \
+         patch("soundcloud.mirror.get_set_tracks", side_effect=Exception("boom")):
+        resp = client.get("/sc/set/123/tracks")
+    assert resp.status_code == 500
+    assert json.loads(resp.data)["status"] == "error"
+
+
+def test_sc_user_likes_happy_path_default_limit(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", True)
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=MagicMock()), \
+         patch("soundcloud.mirror.get_user_likes", return_value=[_fake_sc_track("liked")]) as m:
+        resp = client.get("/sc/user/42/likes")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["tracks"][0]["title"] == "liked"
+    assert m.call_args.args[1] == 42
+    assert m.call_args.kwargs["limit"] == 50
+
+
+def test_sc_user_likes_clamps_limit(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", True)
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=MagicMock()), \
+         patch("soundcloud.mirror.get_user_likes", return_value=[]) as m:
+        resp = client.get("/sc/user/42/likes?limit=9999")
+    assert resp.status_code == 200
+    assert m.call_args.kwargs["limit"] == 200
+
+
+def test_sc_user_likes_connecting_when_not_ready(client, monkeypatch):
+    import sWebExt.py_server.server as srv
+    monkeypatch.setattr(srv, "_sc_client_ready", False)
+    resp = client.get("/sc/user/42/likes")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "connecting"
