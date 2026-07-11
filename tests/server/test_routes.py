@@ -1304,3 +1304,78 @@ def test_genres_preview_upstream_error_returns_500(client, tmp_path):
         resp = client.get("/genres/preview?tag=dub")
     assert resp.status_code == 500
     assert json.loads(resp.data)["status"] == "error"
+
+
+def _seed_vocab_db(path):
+    import json as _json
+    from insights import db as idb
+    conn = idb.connect(path)
+    conn.execute(
+        "INSERT INTO artist_tags (artist, tags_json, primary_genre, fetched_at) VALUES (?, ?, ?, ?)",
+        ("Deepchord", _json.dumps([{"name": "dub techno", "weight": 100},
+                                   {"name": "Ambient", "weight": 60}]), "dub techno", 1))
+    conn.execute(
+        "INSERT INTO artist_tags (artist, tags_json, primary_genre, fetched_at) VALUES (?, ?, ?, ?)",
+        ("King Tubby", _json.dumps([{"name": "dub", "weight": 100}]), "dub", 1))
+    conn.commit()
+    conn.close()
+
+
+def test_genres_vocab_merges_insights_and_library(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as srv
+    srv._genre_vocab_cache["tags"] = None
+    dbp = str(tmp_path / "i.db")
+    _seed_vocab_db(dbp)
+    monkeypatch.setattr(srv, "_insights_db_path", lambda: dbp)
+    cfg_path = _cfg_file_with(tmp_path, {
+        "navidrome_url": "http://x", "navidrome_user": "u", "navidrome_pass": "p"})
+    fake_subsonic = MagicMock()
+    fake_subsonic.get_genres.return_value = [
+        {"name": "Techno", "songCount": 50}, {"name": "dub", "songCount": 10}]
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path), \
+         patch("discover.subsonic.Subsonic", return_value=fake_subsonic):
+        resp = client.get("/genres/vocab")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    # casefolded, deduped ("dub" from both sources appears once), sorted
+    assert data["tags"] == ["ambient", "dub", "dub techno", "techno"]
+
+
+def test_genres_vocab_insights_only_when_no_navidrome_creds(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as srv
+    srv._genre_vocab_cache["tags"] = None
+    dbp = str(tmp_path / "i.db")
+    _seed_vocab_db(dbp)
+    monkeypatch.setattr(srv, "_insights_db_path", lambda: dbp)
+    cfg_path = _cfg_file_with(tmp_path, {})
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path):
+        resp = client.get("/genres/vocab")
+    data = json.loads(resp.data)
+    assert data["tags"] == ["ambient", "dub", "dub techno"]
+
+
+def test_genres_vocab_empty_sources_returns_empty_list(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as srv
+    srv._genre_vocab_cache["tags"] = None
+    monkeypatch.setattr(srv, "_insights_db_path", lambda: str(tmp_path / "missing.db"))
+    cfg_path = _cfg_file_with(tmp_path, {})
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path):
+        resp = client.get("/genres/vocab")
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["tags"] == []
+
+
+def test_genres_vocab_cached_second_call(client, monkeypatch, tmp_path):
+    import sWebExt.py_server.server as srv
+    srv._genre_vocab_cache["tags"] = None
+    dbp = str(tmp_path / "i.db")
+    _seed_vocab_db(dbp)
+    calls = []
+    monkeypatch.setattr(srv, "_insights_db_path", lambda: (calls.append(1), dbp)[1])
+    cfg_path = _cfg_file_with(tmp_path, {})
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path):
+        client.get("/genres/vocab")
+        client.get("/genres/vocab")
+    assert len(calls) == 1

@@ -1906,6 +1906,59 @@ def genres_preview():
     return jsonify(payload)
 
 
+_genre_vocab_cache: dict = {"ts": 0.0, "tags": None}
+_GENRE_VOCAB_TTL = 600  # seconds
+
+
+def _vocab_from_insights() -> set:
+    """Tag names from the insights artist_tags cache (casefolded)."""
+    tags = set()
+    try:
+        from insights import db as insights_db
+        conn = insights_db.connect(_insights_db_path())
+        try:
+            for (tags_json,) in conn.execute("SELECT tags_json FROM artist_tags"):
+                for t in (json.loads(tags_json or "[]") or []):
+                    name = (t.get("name") or "").strip()
+                    if name:
+                        tags.add(name.casefold())
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("[GENRES] vocab: insights source unavailable", exc_info=True)
+    return tags
+
+
+def _vocab_from_library() -> set:
+    """Genre names from Navidrome (casefolded); empty when creds missing/down."""
+    tags = set()
+    try:
+        cfg = _get_config()
+        host = cfg.get("navidrome_url", "")
+        user = cfg.get("navidrome_user", "")
+        pw = cfg.get("navidrome_pass", "")
+        if host and user and pw:
+            from discover.subsonic import Subsonic
+            for g in Subsonic(host, user, pw).get_genres():
+                name = (g.get("name") or "").strip()
+                if name:
+                    tags.add(name.casefold())
+    except Exception:
+        logger.warning("[GENRES] vocab: library source unavailable", exc_info=True)
+    return tags
+
+
+@app.route("/genres/vocab", methods=["GET"])
+def genres_vocab():
+    now = time.time()
+    if _genre_vocab_cache["tags"] is not None and now - _genre_vocab_cache["ts"] < _GENRE_VOCAB_TTL:
+        return jsonify({"status": "ok", "tags": _genre_vocab_cache["tags"]})
+    tags = sorted(_vocab_from_insights() | _vocab_from_library())
+    _genre_vocab_cache["ts"] = now
+    _genre_vocab_cache["tags"] = tags
+    return jsonify({"status": "ok", "tags": tags})
+
+
 # ── Explore UI ────────────────────────────────────────────────────────────────
 
 # ── SoundCloud routes ─────────────────────────────────────────────────────────
