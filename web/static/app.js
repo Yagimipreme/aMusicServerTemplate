@@ -428,6 +428,7 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
         cardDiv.appendChild(w);
       }
     } catch (e) {
+      if (tagInput.value.trim().toLowerCase() !== tag.toLowerCase()) return;  // stale
       cardDiv.textContent = 'preview unavailable';
     }
   }
