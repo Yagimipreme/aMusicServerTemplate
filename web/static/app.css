@@ -155,3 +155,11 @@ svg.chart{display:block;max-width:360px;margin:auto}
 .ins-missing{display:flex;justify-content:space-between;padding:4px 0;
   border-bottom:1px solid var(--line);font-size:12px;color:var(--txt)}
 .ins-missing .plays{color:var(--mut);font-family:'JetBrains Mono',monospace}
+
+.artist-panel{margin-bottom:14px}
+.ap-head{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.ap-head b{font-size:.9rem}
+.ap-ext{flex:none;font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut);text-decoration:none;border:1px solid var(--line);border-radius:20px;padding:4px 10px;transition:color .15s,border-color .15s}
+.ap-ext:hover{color:var(--acid);border-color:var(--acid-dim)}
+.pl-row{cursor:pointer}
+.pl-tracks{margin-left:28px;font-family:'JetBrains Mono';font-size:.64rem;color:var(--mut)}

@@ -841,6 +841,175 @@ async function renderSearch() {
     return {el: row, source: item.source === 'sc' ? 'soundcloud' : 'youtube'};
   }
 
+  function scTrackToItem(t, fallbackArtist) {
+    return {
+      source: 'sc',
+      title: t.title || '',
+      artist: t.artist || fallbackArtist || '',
+      duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
+      url: t.permalink_url || '',
+      artwork_url: t.artwork_url || null,
+    };
+  }
+
+  function openArtistPanel(user) {
+    artistsEl.style.display = 'none';
+    srcRow.style.display = 'none';   // source pills don't apply inside the panel
+    resultsEl.textContent = '';
+    allResults = [];
+
+    const panel = document.createElement('div');
+    panel.className = 'artist-panel';
+
+    const head = document.createElement('div');
+    head.className = 'ap-head';
+    const hname = document.createElement('b');
+    hname.textContent = user.full_name || user.username || '';
+    head.appendChild(hname);
+    if (user.permalink_url) {
+      const ext = document.createElement('a');
+      ext.className = 'ap-ext';
+      ext.href = user.permalink_url;
+      ext.target = '_blank';
+      ext.rel = 'noopener';
+      ext.textContent = '↗ SC';
+      head.appendChild(ext);
+    }
+    panel.appendChild(head);
+
+    const tabRow = document.createElement('div');
+    tabRow.className = 'src-row';
+    const body = document.createElement('div');
+    const state = {profile: null, likes: null};
+    const tabs = {};
+
+    function setMsg(text) {
+      body.textContent = '';
+      const m = document.createElement('div');
+      m.className = 'warn';
+      m.textContent = text;
+      body.appendChild(m);
+    }
+
+    async function loadProfile() {
+      if (state.profile) return state.profile;
+      const url = user.permalink_url ||
+        (user.permalink ? 'https://soundcloud.com/' + user.permalink : '');
+      if (!url) throw new Error('no profile URL for this artist');
+      const data = await API('/sc/resolve?url=' + encodeURIComponent(url));
+      if (data.status !== 'ok') throw new Error(data.reason || data.error || 'profile unavailable');
+      state.profile = data;
+      return data;
+    }
+
+    function renderTrackRows(tracks, emptyText) {
+      body.textContent = '';
+      let shown = 0;
+      (tracks || []).forEach(t => {
+        const item = scTrackToItem(t, user.full_name || user.username || '');
+        if (item.url) { body.appendChild(buildResultRow(item).el); shown++; }
+      });
+      if (!shown) setMsg(emptyText);
+    }
+
+    function renderPlaylists(sets) {
+      body.textContent = '';
+      if (!sets || !sets.length) { setMsg('No playlists.'); return; }
+      sets.forEach(pl => {
+        const wrap = document.createElement('div');
+        const row = document.createElement('div');
+        row.className = 'result pl-row';
+        const cover = document.createElement('div');
+        cover.className = 'cover';
+        if (pl.artwork_url) {
+          const img = document.createElement('img');
+          img.src = pl.artwork_url;
+          img.alt = '';
+          img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:3px';
+          img.onerror = () => { img.remove(); cover.textContent = 'SC'; };
+          cover.appendChild(img);
+        } else {
+          cover.textContent = 'SC';
+        }
+        const meta = document.createElement('div');
+        meta.className = 'r-meta';
+        const title = document.createElement('b');
+        title.textContent = pl.title || '(untitled playlist)';
+        const sub = document.createElement('span');
+        sub.textContent = (pl.track_count || 0) + ' tracks';
+        meta.appendChild(title);
+        meta.appendChild(sub);
+        row.appendChild(cover);
+        row.appendChild(meta);
+
+        const inner = document.createElement('div');
+        inner.className = 'pl-tracks';
+        inner.style.display = 'none';
+        let loaded = false;
+        row.onclick = async () => {
+          if (inner.style.display !== 'none') { inner.style.display = 'none'; return; }
+          inner.style.display = '';
+          if (loaded) return;
+          inner.textContent = 'loading…';
+          try {
+            const data = await API('/sc/set/' + pl.id + '/tracks');
+            if (data.status !== 'ok') throw new Error(data.reason || data.error || 'unavailable');
+            inner.textContent = '';
+            let shown = 0;
+            (data.tracks || []).forEach(t => {
+              const item = scTrackToItem(t, user.full_name || user.username || '');
+              if (item.url) { inner.appendChild(buildResultRow(item).el); shown++; }
+            });
+            if (!shown) inner.textContent = 'no playable tracks';
+            loaded = true;
+          } catch (e) {
+            inner.textContent = 'failed to load: ' + (e.message || 'unknown');
+          }
+        };
+        wrap.appendChild(row);
+        wrap.appendChild(inner);
+        body.appendChild(wrap);
+      });
+    }
+
+    async function showTab(name) {
+      Object.entries(tabs).forEach(([n, el]) => el.classList.toggle('on', n === name));
+      setMsg('Loading…');
+      try {
+        if (name === 'tracks') {
+          const p = await loadProfile();
+          renderTrackRows(p.tracks, 'No tracks found for this artist.');
+        } else if (name === 'playlists') {
+          const p = await loadProfile();
+          renderPlaylists(p.sets);
+        } else {
+          if (!state.likes) {
+            const data = await API('/sc/user/' + user.id + '/likes?limit=50');
+            if (data.status !== 'ok') throw new Error(data.reason || data.error || 'likes unavailable');
+            state.likes = data.tracks || [];
+          }
+          renderTrackRows(state.likes, 'No likes found.');
+        }
+      } catch (e) {
+        setMsg('Failed to load: ' + (e.message || 'unknown'));
+      }
+    }
+
+    [['tracks', 'Tracks'], ['playlists', 'Playlists'], ['likes', 'Likes']].forEach(([key, label]) => {
+      const pill = document.createElement('span');
+      pill.className = 'src' + (key === 'tracks' ? ' on' : '');
+      pill.textContent = label;
+      pill.onclick = () => showTab(key);
+      tabs[key] = pill;
+      tabRow.appendChild(pill);
+    });
+
+    panel.appendChild(tabRow);
+    panel.appendChild(body);
+    resultsEl.appendChild(panel);
+    showTab('tracks');
+  }
+
   function buildArtistChip(user) {
     const chip = document.createElement('div');
     chip.className = 'artist-chip';
@@ -871,45 +1040,7 @@ async function renderSearch() {
     chip.appendChild(av);
     chip.appendChild(info);
 
-    chip.onclick = async () => {
-      artistsEl.style.display = 'none';
-      resultsEl.textContent = '';
-      allResults = [];
-      const loading = document.createElement('div');
-      loading.className = 'warn';
-      loading.textContent = 'Loading tracks for ' + (user.username || '') + '…';
-      resultsEl.appendChild(loading);
-      try {
-        const scUrl = 'https://soundcloud.com/' + encodeURIComponent(user.username);
-        const data = await API('/sc/resolve?url=' + encodeURIComponent(scUrl));
-        resultsEl.textContent = '';
-        if (data.status === 'ok' && data.tracks && data.tracks.length) {
-          data.tracks.forEach(t => {
-            const item = {
-              source: 'sc',
-              title: t.title || '',
-              artist: user.full_name || user.username || '',
-              duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
-              url: t.permalink_url || '',
-              artwork_url: t.artwork_url || null,
-            };
-            if (item.url) allResults.push(buildResultRow(item));
-          });
-          applyFilter();
-        } else {
-          const none = document.createElement('div');
-          none.className = 'warn';
-          none.textContent = 'No tracks found for this artist.';
-          resultsEl.appendChild(none);
-        }
-      } catch(e) {
-        resultsEl.textContent = '';
-        const err = document.createElement('div');
-        err.className = 'warn';
-        err.textContent = 'Failed to load artist tracks: ' + (e.message || 'unknown');
-        resultsEl.appendChild(err);
-      }
-    };
+    chip.onclick = () => openArtistPanel(user);
 
     return chip;
   }
@@ -917,6 +1048,7 @@ async function renderSearch() {
   async function doSearch(q) {
     artistsEl.textContent = '';
     artistsEl.style.display = 'none';
+    srcRow.style.display = '';
     resultsEl.textContent = '';
     allResults = [];
 
