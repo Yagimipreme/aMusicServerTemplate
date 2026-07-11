@@ -780,7 +780,7 @@ async function renderSearch() {
       img.src = item.artwork_url;
       img.alt = '';
       img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:3px';
-      img.onerror = () => { img.remove(); cover.textContent = 'SC'; };
+      img.onerror = () => { img.remove(); cover.textContent = item.source === 'sc' ? 'SC' : 'YT'; };
       cover.appendChild(img);
     } else {
       cover.textContent = item.source === 'sc' ? 'SC' : 'YT';
@@ -826,6 +826,17 @@ async function renderSearch() {
       }
     };
     row.appendChild(getBtn);
+
+    if (item.url) {
+      const ext = document.createElement('a');
+      ext.className = 'ext-link';
+      ext.href = item.url;
+      ext.target = '_blank';
+      ext.rel = 'noopener';
+      ext.textContent = '↗';
+      ext.title = item.source === 'sc' ? 'Open on SoundCloud' : 'Open on YouTube';
+      row.appendChild(ext);
+    }
 
     return {el: row, source: item.source === 'sc' ? 'soundcloud' : 'youtube'};
   }
@@ -962,6 +973,7 @@ async function renderSearch() {
           artist: r.artist,
           duration: r.duration,
           url: r.url,
+          artwork_url: r.artwork_url || null,
         }));
       });
     }

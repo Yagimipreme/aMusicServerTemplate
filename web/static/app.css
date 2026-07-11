@@ -89,6 +89,8 @@ select,.txt{background:var(--panel2);border:1px solid var(--line);color:var(--tx
 .result .r-meta span{font-family:'JetBrains Mono';font-size:.64rem;color:var(--mut)}
 .get{width:38px;height:38px;border-radius:50%;border:1px solid var(--acid-dim);color:var(--acid);background:transparent;font-size:1.1rem;flex:none;cursor:pointer}
 .get.have{border-color:var(--line);color:var(--mut)}
+.result .ext-link{flex:none;font-family:'JetBrains Mono';font-size:.8rem;color:var(--mut);text-decoration:none;padding:6px;transition:color .15s}
+.result .ext-link:hover{color:var(--acid)}
 
 /* ---- SETTINGS ---- */
 .sgroup{border:1px solid var(--line);background:var(--panel);border-radius:4px;margin-bottom:10px;overflow:hidden}
