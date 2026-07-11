@@ -1235,3 +1235,72 @@ def test_sc_user_likes_connecting_when_not_ready(client, monkeypatch):
     resp = client.get("/sc/user/42/likes")
     assert resp.status_code == 200
     assert json.loads(resp.data)["status"] == "connecting"
+
+
+# ── /genres routes (tag preview + vocab) ──────────────────────────────────────
+
+def _cfg_file_with(tmp_path, cfg: dict):
+    import json as _json
+    f = tmp_path / "config.json"
+    f.write_text(_json.dumps(cfg))
+    return str(f)
+
+
+def test_genres_preview_missing_tag_returns_400(client):
+    resp = client.get("/genres/preview")
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["status"] == "error"
+
+
+def test_genres_preview_no_api_key_unavailable(client, tmp_path):
+    cfg_path = _cfg_file_with(tmp_path, {})
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path):
+        resp = client.get("/genres/preview?tag=dub")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "unavailable"
+    assert "lastfm_api_key" in data["reason"]
+
+
+def test_genres_preview_happy_path(client, tmp_path, monkeypatch):
+    import sWebExt.py_server.server as srv
+    srv._genre_preview_cache.clear()
+    cfg_path = _cfg_file_with(tmp_path, {"lastfm_api_key": "k"})
+    fake = {"tag": "dub", "taggings": 1000, "reach": 500,
+            "top_artists": ["King Tubby"], "similar": ["dub techno"]}
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path), \
+         patch("lastfm.tag_preview.get_tag_preview", return_value=fake) as m, \
+         patch("lastfm.client.LastFMClient"):
+        resp = client.get("/genres/preview?tag=dub")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["taggings"] == 1000
+    assert data["top_artists"] == ["King Tubby"]
+    assert m.call_args.args[1] == "dub"
+
+
+def test_genres_preview_cache_hit_skips_second_call(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    srv._genre_preview_cache.clear()
+    cfg_path = _cfg_file_with(tmp_path, {"lastfm_api_key": "k"})
+    fake = {"tag": "dub", "taggings": 1, "reach": 1, "top_artists": [], "similar": []}
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path), \
+         patch("lastfm.tag_preview.get_tag_preview", return_value=fake) as m, \
+         patch("lastfm.client.LastFMClient"):
+        client.get("/genres/preview?tag=Dub")
+        resp = client.get("/genres/preview?tag=dUB")  # same tag, different case
+    assert resp.status_code == 200
+    assert m.call_count == 1
+
+
+def test_genres_preview_upstream_error_returns_500(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    srv._genre_preview_cache.clear()
+    cfg_path = _cfg_file_with(tmp_path, {"lastfm_api_key": "k"})
+    with patch("sWebExt.py_server.server._CONFIG_PATH", cfg_path), \
+         patch("lastfm.tag_preview.get_tag_preview", side_effect=RuntimeError("down")), \
+         patch("lastfm.client.LastFMClient"):
+        resp = client.get("/genres/preview?tag=dub")
+    assert resp.status_code == 500
+    assert json.loads(resp.data)["status"] == "error"

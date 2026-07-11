@@ -1875,6 +1875,37 @@ def library_suffixes_post():
     return jsonify({"status": "ok", "count": len(suffixes)})
 
 
+# ── Genre tag preview / vocabulary ────────────────────────────────────────────
+
+_genre_preview_cache: dict = {}   # casefolded tag -> (fetched_at, payload)
+_GENRE_PREVIEW_TTL = 3600         # seconds
+
+
+@app.route("/genres/preview", methods=["GET"])
+def genres_preview():
+    tag = (request.args.get("tag") or "").strip()
+    if not tag:
+        return jsonify({"status": "error", "error": "tag required"}), 400
+    cfg = _get_config()
+    api_key = cfg.get("lastfm_api_key", "")
+    if not api_key:
+        return jsonify({"status": "unavailable", "reason": "lastfm_api_key not configured"})
+    key = tag.casefold()
+    now = time.time()
+    cached = _genre_preview_cache.get(key)
+    if cached and now - cached[0] < _GENRE_PREVIEW_TTL:
+        return jsonify(cached[1])
+    try:
+        from lastfm.client import LastFMClient
+        from lastfm.tag_preview import get_tag_preview
+        payload = {"status": "ok", **get_tag_preview(LastFMClient(api_key), tag)}
+    except Exception as e:
+        logger.exception("[GENRES] preview failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+    _genre_preview_cache[key] = (now, payload)
+    return jsonify(payload)
+
+
 # ── Explore UI ────────────────────────────────────────────────────────────────
 
 # ── SoundCloud routes ─────────────────────────────────────────────────────────
