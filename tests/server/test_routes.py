@@ -795,6 +795,58 @@ def test_yt_search_subprocess_error_returns_empty_not_500(client):
     assert data["results"] == []
 
 
+def test_yt_search_artwork_from_entry_thumbnails(client):
+    """artwork_url comes from the last (largest) entry in yt-dlp's thumbnails list."""
+    fake_stdout = json.dumps({
+        "entries": [
+            {"title": "T", "uploader": "A", "duration": 60, "id": "abc123",
+             "url": "https://www.youtube.com/watch?v=abc123",
+             "thumbnails": [
+                 {"url": "https://i.ytimg.com/vi/abc123/default.jpg"},
+                 {"url": "https://i.ytimg.com/vi/abc123/maxresdefault.jpg"},
+             ]},
+        ]
+    })
+    import subprocess as _sp
+    mock_result = _sp.CompletedProcess(args=[], returncode=0, stdout=fake_stdout, stderr="")
+    with patch("subprocess.run", return_value=mock_result):
+        resp = client.get("/yt/search?q=test")
+    r = json.loads(resp.data)["results"][0]
+    assert r["artwork_url"] == "https://i.ytimg.com/vi/abc123/maxresdefault.jpg"
+
+
+def test_yt_search_artwork_falls_back_to_video_id(client):
+    """Entries without thumbnail data derive artwork_url from the video id."""
+    fake_stdout = json.dumps({
+        "entries": [
+            {"title": "T", "uploader": "A", "duration": 60, "id": "abc123",
+             "url": "https://www.youtube.com/watch?v=abc123"},
+        ]
+    })
+    import subprocess as _sp
+    mock_result = _sp.CompletedProcess(args=[], returncode=0, stdout=fake_stdout, stderr="")
+    with patch("subprocess.run", return_value=mock_result):
+        resp = client.get("/yt/search?q=test")
+    r = json.loads(resp.data)["results"][0]
+    assert r["artwork_url"] == "https://i.ytimg.com/vi/abc123/hqdefault.jpg"
+
+
+def test_yt_search_artwork_empty_when_no_id_or_thumbs(client):
+    """No thumbnails and no id → artwork_url is empty string, not a broken URL."""
+    fake_stdout = json.dumps({
+        "entries": [
+            {"title": "T", "uploader": "A", "duration": 60,
+             "url": "https://www.youtube.com/watch?v=x"},
+        ]
+    })
+    import subprocess as _sp
+    mock_result = _sp.CompletedProcess(args=[], returncode=0, stdout=fake_stdout, stderr="")
+    with patch("subprocess.run", return_value=mock_result):
+        resp = client.get("/yt/search?q=test")
+    r = json.loads(resp.data)["results"][0]
+    assert r["artwork_url"] == ""
+
+
 # ── /acquire route ────────────────────────────────────────────────────────────
 
 def test_acquire_no_body_returns_400(client):

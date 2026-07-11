@@ -1768,6 +1768,19 @@ def follow_settings():
 
 # ── YouTube search ────────────────────────────────────────────────────────────
 
+def _yt_thumbnail(entry: dict) -> str:
+    """Best-effort thumbnail URL for a yt-dlp flat-playlist entry."""
+    thumbs = entry.get("thumbnails") or []
+    if thumbs:
+        url = (thumbs[-1] or {}).get("url") or ""
+        if url:
+            return url
+    if entry.get("thumbnail"):
+        return entry["thumbnail"]
+    vid = entry.get("id") or ""
+    return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else ""
+
+
 @app.route("/yt/search", methods=["GET"])
 def yt_search():
     q = (request.args.get("q") or "").strip()
@@ -1788,6 +1801,7 @@ def yt_search():
             "artist": e.get("uploader") or e.get("channel") or "",
             "duration": e.get("duration"),
             "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id','')}",
+            "artwork_url": _yt_thumbnail(e),
         } for e in (data.get("entries") or []) if e]
         return jsonify({"results": results})
     except Exception as e:
