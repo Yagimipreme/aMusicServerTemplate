@@ -36,6 +36,8 @@ def _user_from_raw(raw: dict) -> dict:
         "avatar_url": raw.get("avatar_url") or "",
         "track_count": raw.get("track_count", 0),
         "followers_count": raw.get("followers_count", 0),
+        "permalink": raw.get("permalink", ""),
+        "permalink_url": raw.get("permalink_url", ""),
     }
 
 

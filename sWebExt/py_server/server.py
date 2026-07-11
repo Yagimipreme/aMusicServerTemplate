@@ -1768,6 +1768,19 @@ def follow_settings():
 
 # ── YouTube search ────────────────────────────────────────────────────────────
 
+def _yt_thumbnail(entry: dict) -> str:
+    """Best-effort thumbnail URL for a yt-dlp flat-playlist entry."""
+    thumbs = entry.get("thumbnails") or []
+    if thumbs:
+        url = (thumbs[-1] or {}).get("url") or ""
+        if url:
+            return url
+    if entry.get("thumbnail"):
+        return entry["thumbnail"]
+    vid = entry.get("id") or ""
+    return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else ""
+
+
 @app.route("/yt/search", methods=["GET"])
 def yt_search():
     q = (request.args.get("q") or "").strip()
@@ -1788,6 +1801,7 @@ def yt_search():
             "artist": e.get("uploader") or e.get("channel") or "",
             "duration": e.get("duration"),
             "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id','')}",
+            "artwork_url": _yt_thumbnail(e),
         } for e in (data.get("entries") or []) if e]
         return jsonify({"results": results})
     except Exception as e:
@@ -1947,6 +1961,42 @@ def sc_preview():
         return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
     composed = f"{stream_url}?client_id={sc.client_id}"
     return jsonify({"status": "ok", "stream_url": composed})
+
+
+@app.route("/sc/set/<int:set_id>/tracks", methods=["GET"])
+def sc_set_tracks(set_id):
+    if not _sc_client_ready:
+        return jsonify({"status": "connecting", "reason": "SoundCloud client initializing", "retry_after": 30})
+    sc = _get_sc_client()
+    if not sc:
+        return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
+    try:
+        from soundcloud.mirror import get_set_tracks
+        tracks = get_set_tracks(sc, set_id)
+        return jsonify({"status": "ok", "tracks": tracks})
+    except Exception as e:
+        logger.exception("[SC] set tracks failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/sc/user/<int:user_id>/likes", methods=["GET"])
+def sc_user_likes(user_id):
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    if not _sc_client_ready:
+        return jsonify({"status": "connecting", "reason": "SoundCloud client initializing", "retry_after": 30})
+    sc = _get_sc_client()
+    if not sc:
+        return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
+    try:
+        from soundcloud.mirror import get_user_likes
+        tracks = get_user_likes(sc, user_id, limit=limit)
+        return jsonify({"status": "ok", "tracks": tracks})
+    except Exception as e:
+        logger.exception("[SC] user likes failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 # ── Spotify routes ────────────────────────────────────────────────────────────
