@@ -892,15 +892,19 @@ async function renderSearch() {
       body.appendChild(m);
     }
 
-    async function loadProfile() {
-      if (state.profile) return state.profile;
-      const url = user.permalink_url ||
-        (user.permalink ? 'https://soundcloud.com/' + user.permalink : '');
-      if (!url) throw new Error('no profile URL for this artist');
-      const data = await API('/sc/resolve?url=' + encodeURIComponent(url));
-      if (data.status !== 'ok') throw new Error(data.reason || data.error || 'profile unavailable');
-      state.profile = data;
-      return data;
+    function loadProfile() {
+      if (!state.profile) {
+        state.profile = (async () => {
+          const url = user.permalink_url ||
+            (user.permalink ? 'https://soundcloud.com/' + user.permalink : '');
+          if (!url) throw new Error('no profile URL for this artist');
+          const data = await API('/sc/resolve?url=' + encodeURIComponent(url));
+          if (data.status !== 'ok') throw new Error(data.reason || data.error || 'profile unavailable');
+          return data;
+        })();
+        state.profile.catch(() => { state.profile = null; });
+      }
+      return state.profile;
     }
 
     function renderTrackRows(tracks, emptyText) {
@@ -992,12 +996,16 @@ async function renderSearch() {
           renderPlaylists(p.sets);
         } else {
           if (!state.likes) {
-            const data = await API('/sc/user/' + user.id + '/likes?limit=50');
-            if (data.status !== 'ok') throw new Error(data.reason || data.error || 'likes unavailable');
-            state.likes = data.tracks || [];
+            state.likes = (async () => {
+              const data = await API('/sc/user/' + user.id + '/likes?limit=50');
+              if (data.status !== 'ok') throw new Error(data.reason || data.error || 'likes unavailable');
+              return data.tracks || [];
+            })();
+            state.likes.catch(() => { state.likes = null; });
           }
+          const likes = await state.likes;
           if (gen !== tabGen) return;
-          renderTrackRows(state.likes, 'No likes found.');
+          renderTrackRows(likes, 'No likes found.');
         }
       } catch (e) {
         if (gen !== tabGen) return;
