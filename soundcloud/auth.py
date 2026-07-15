@@ -225,3 +225,20 @@ def discover_personal_mix_endpoints(username: str, password: str, dump_path: str
             driver.quit()
         except Exception:
             pass
+
+
+if __name__ == "__main__":
+    import sys
+
+    logging.basicConfig(level=logging.INFO)
+    _config_path = os.path.join(_PROJECT_ROOT, "config.json")
+    with open(_config_path, "r", encoding="utf-8") as _f:
+        _cfg = json.load(_f)
+    _username = _cfg.get("sc_username", "")
+    _password = _cfg.get("sc_password", "")
+    if not _username or not _password:
+        print("sc_username/sc_password not set in config.json — aborting")
+        sys.exit(1)
+    _dump_path = os.path.join(_PROJECT_ROOT, "logs", "sc_mix_discovery.json")
+    _result_path = discover_personal_mix_endpoints(_username, _password, _dump_path)
+    print(f"Discovery dump written to {_result_path}")
