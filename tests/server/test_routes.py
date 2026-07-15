@@ -207,6 +207,20 @@ def test_settings_schema_no_dead_discover_scheduler_rows(client, tmp_path):
     assert not found_dead, f"Dead settings paths still in schema: {found_dead}"
 
 
+def test_settings_schema_has_sc_password_secret_field(client, tmp_path):
+    """sc_password must be exposed as a secret field under the SoundCloud Mixes group."""
+    import json as _json
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps({}))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
+        resp = client.get("/settings")
+    data = _json.loads(resp.data)
+    entries = {e["path"]: e for e in data["schema"]}
+    assert "sc_password" in entries
+    assert entries["sc_password"]["type"] == "secret"
+    assert entries["sc_password"]["group"] == "SoundCloud Mixes"
+
+
 def test_post_settings_type_mismatch_returns_400(client, tmp_path):
     import json as _json
     cfg = {}

@@ -1186,6 +1186,8 @@ SETTINGS_SCHEMA = [
     {"path": "sp_playlist_ids",              "type": "list[str]", "label": "Spotify playlist IDs",      "group": "Sources"},
     {"path": "sc_topsong",                   "type": "str",       "label": "SoundCloud top song URL",   "group": "Sources"},
     {"path": "spotify_playlists_dir",        "type": "str",       "label": "Spotify playlists dir",     "group": "Sources"},
+    # SoundCloud Mixes group
+    {"path": "sc_password",                  "type": "secret",    "label": "SoundCloud password",       "group": "SoundCloud Mixes"},
     # Maintenance group
     {"path": "dedup.enabled",                "type": "bool",      "label": "Dedup enabled",             "group": "Maintenance"},
     {"path": "dedup.interval_hours",         "type": "int",       "label": "Dedup interval (hours)",    "group": "Maintenance", "min": 1, "max": 168},
