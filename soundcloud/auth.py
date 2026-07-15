@@ -151,3 +151,77 @@ def login_and_capture_token(username: str, password: str) -> str:
             driver.quit()
         except Exception:
             pass
+
+
+def _write_dump(dump_path: str, result: dict) -> None:
+    os.makedirs(os.path.dirname(dump_path), exist_ok=True)
+    with open(dump_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+
+def discover_personal_mix_endpoints(username: str, password: str, dump_path: str,
+                                     visit_urls: list = None) -> str:
+    """Log in headlessly, visit pages likely to surface personal mixes, and dump
+    every distinct api-v2 request URL + a truncated response body to dump_path.
+
+    Returns dump_path. The file is always written, even {"entries": []} on
+    login/driver failure, so callers never have to special-case a missing file.
+    """
+    visit_urls = visit_urls or [
+        "https://soundcloud.com/",
+        "https://soundcloud.com/discover",
+        "https://soundcloud.com/you/library/playlists",
+    ]
+    result = {"entries": []}
+    driver = _make_driver()
+    if driver is None:
+        _write_dump(dump_path, result)
+        return dump_path
+    try:
+        if not _perform_login(driver, username, password):
+            _write_dump(dump_path, result)
+            return dump_path
+
+        seen_urls = set()
+        for page in visit_urls:
+            try:
+                driver.get(page)
+                time.sleep(3)
+            except Exception:
+                logger.exception("[SC-AUTH] Failed to visit %s", page)
+                continue
+
+            try:
+                entries = driver.get_log("performance")
+            except Exception:
+                logger.exception("[SC-AUTH] Failed to read performance logs for %s", page)
+                continue
+
+            for entry in entries:
+                msg = json.loads(entry.get("message", "{}")).get("message", {})
+                if msg.get("method") != "Network.requestWillBeSent":
+                    continue
+                params = msg.get("params", {})
+                url = params.get("request", {}).get("url", "")
+                request_id = params.get("requestId")
+                if "api-v2.soundcloud.com" not in url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
+                body = ""
+                try:
+                    body_resp = driver.execute_cdp_cmd(
+                        "Network.getResponseBody", {"requestId": request_id})
+                    body = (body_resp or {}).get("body", "")[:2000]
+                except Exception:
+                    pass  # response body may already be gone (redirects/cache) — non-fatal
+
+                result["entries"].append({"page": page, "url": url, "body_sample": body})
+
+        _write_dump(dump_path, result)
+        return dump_path
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
