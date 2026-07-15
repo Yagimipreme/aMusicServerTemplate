@@ -64,6 +64,65 @@ def test_get_401_triggers_selenium_refresh_and_retries():
         os.unlink(cfg_path)
 
 
+def test_oauth_token_sets_authorization_header():
+    from soundcloud.client import SCClient
+    with patch("soundcloud.client.requests.Session") as mock_sess_cls:
+        mock_sess = MagicMock()
+        mock_sess.headers = {}
+        mock_sess_cls.return_value = mock_sess
+        SCClient("cid", "/tmp/cfg.json", oauth_token="OAuth abc123")
+    assert mock_sess.headers["Authorization"] == "OAuth abc123"
+
+
+def test_no_oauth_token_leaves_authorization_header_unset():
+    from soundcloud.client import SCClient
+    with patch("soundcloud.client.requests.Session") as mock_sess_cls:
+        mock_sess = MagicMock()
+        mock_sess.headers = {}
+        mock_sess_cls.return_value = mock_sess
+        SCClient("cid", "/tmp/cfg.json")
+    assert "Authorization" not in mock_sess.headers
+
+
+def test_get_401_with_oauth_token_refreshes_via_login_and_retries():
+    import json, os, tempfile
+    from soundcloud.client import SCClient
+
+    cfg = {"sc_username": "user1", "sc_password": "pw1", "sc_oauth_token": "OAuth old"}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(cfg, f)
+        cfg_path = f.name
+
+    try:
+        resp_401 = MagicMock()
+        resp_401.status_code = 401
+        resp_401.raise_for_status.side_effect = Exception("401")
+
+        resp_ok = MagicMock()
+        resp_ok.status_code = 200
+        resp_ok.json.return_value = {"id": 42}
+        resp_ok.raise_for_status.return_value = None
+
+        with patch("soundcloud.client.requests.Session") as mock_sess_cls:
+            mock_sess = MagicMock()
+            mock_sess.headers = {}
+            mock_sess.get.side_effect = [resp_401, resp_ok]
+            mock_sess_cls.return_value = mock_sess
+
+            with patch("soundcloud.client._refresh_oauth_token", return_value="OAuth new") as mock_refresh:
+                c = SCClient("cid", cfg_path, oauth_token="OAuth old")
+                result = c.get("/me")
+
+        assert result == {"id": 42}
+        assert mock_sess.headers["Authorization"] == "OAuth new"
+        mock_refresh.assert_called_once_with(cfg_path)
+        with open(cfg_path) as f2:
+            persisted = json.load(f2)
+        assert persisted["sc_oauth_token"] == "OAuth new"
+    finally:
+        os.unlink(cfg_path)
+
+
 def test_get_404_raises():
     import requests as req
     resp_404 = MagicMock()

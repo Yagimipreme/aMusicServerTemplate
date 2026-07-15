@@ -221,6 +221,18 @@ def test_settings_schema_has_sc_password_secret_field(client, tmp_path):
     assert entries["sc_password"]["group"] == "SoundCloud Mixes"
 
 
+def test_sc_client_factory_passes_oauth_token(tmp_path):
+    import json as _json
+    cfg = {"sc_client_id": "cid1", "sc_oauth_token": "OAuth tok1"}
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(_json.dumps(cfg))
+    with patch("sWebExt.py_server.server._CONFIG_PATH", str(cfg_file)):
+        with patch("soundcloud.client.SCClient") as mock_cls:
+            from sWebExt.py_server import server as srv
+            srv._get_sc_client()
+    mock_cls.assert_called_once_with("cid1", str(cfg_file), oauth_token="OAuth tok1")
+
+
 def test_post_settings_type_mismatch_returns_400(client, tmp_path):
     import json as _json
     cfg = {}

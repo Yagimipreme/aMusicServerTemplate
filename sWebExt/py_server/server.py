@@ -1860,7 +1860,7 @@ def _get_sc_client():
         cid = cfg.get("sc_client_id", "")
         if not cid:
             return None
-        return SCClient(cid, _CONFIG_PATH)
+        return SCClient(cid, _CONFIG_PATH, oauth_token=cfg.get("sc_oauth_token", ""))
     except Exception:
         logger.warning("[SC] Could not build SCClient")
         return None
