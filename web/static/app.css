@@ -172,3 +172,14 @@ svg.chart{display:block;max-width:360px;margin:auto}
 .tag-card .tc-stats{color:var(--acid);margin-bottom:6px}
 .tag-card .tc-similar{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .tag-card .tc-warn{color:#ffb04d;margin-top:8px}
+
+/* ---- DEDUP REVIEW ---- */
+.dedup-panel{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.dedup-group{border:1px solid var(--line);border-radius:3px;padding:8px;margin-bottom:8px}
+.dedup-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}
+.dedup-row.keep{color:var(--acid)}
+.dedup-row.gone{opacity:.35;text-decoration:line-through}
+.dedup-tag{flex:none;font-size:.52rem;letter-spacing:.1em;border:1px solid var(--acid-dim);border-radius:8px;padding:1px 6px}
+.dedup-path{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dedup-footer{display:flex;align-items:center;gap:10px;margin-top:6px}
+.dedup-result{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}

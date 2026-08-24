@@ -759,20 +759,130 @@ async function renderLibrary() {
   }
 
   // ── 3. De-duplicate ───────────────────────────────────────────────────────────
-  const dedupCard = makeToolCard('De-duplicate', 'find files with identical titles', 'run', async () => {
+  const dedupPanel = document.createElement('div');
+  dedupPanel.className = 'dedup-panel';
+  dedupPanel.style.display = 'none';
+
+  const dedupCard = makeToolCard('De-duplicate', 'review duplicate titles before deleting', 'scan', async () => {
     dedupCard._btn.disabled = true;
     dedupCard._statusSpan.textContent = 'scanning…';
+    dedupPanel.textContent = '';
+    dedupPanel.style.display = 'none';
     try {
-      const r = await API('/library/dedup/run', {method: 'POST'});
-      const n = (r.would_delete || []).length;
-      dedupCard._statusSpan.textContent = n ? n + ' duplicates found' : 'no duplicates';
+      const r = await API('/library/dedup/report', {method: 'POST'});
+      const groups = r.groups_detail || [];
+      const dupCount = groups.reduce((n, g) => n + (g.remove || []).length, 0);
+      dedupCard._statusSpan.textContent = dupCount
+        ? (dupCount + ' duplicates in ' + groups.length + ' groups')
+        : 'no duplicates';
+      if (dupCount) renderDedupGroups(groups);
     } catch(e) {
       dedupCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
     } finally {
       dedupCard._btn.disabled = false;
     }
   });
+  dedupCard.appendChild(dedupPanel);
   el.appendChild(dedupCard);
+
+  function renderDedupGroups(groups) {
+    dedupPanel.textContent = '';
+    dedupPanel.style.display = '';
+    const boxes = [];
+
+    groups.forEach(g => {
+      const gEl = document.createElement('div');
+      gEl.className = 'dedup-group';
+
+      const keepEl = document.createElement('div');
+      keepEl.className = 'dedup-row keep';
+      const keepTag = document.createElement('span');
+      keepTag.className = 'dedup-tag';
+      keepTag.textContent = 'KEEP';
+      const keepTxt = document.createElement('span');
+      keepTxt.className = 'dedup-path';
+      keepTxt.textContent = dedupLabel(g.keep);
+      keepTxt.title = (g.keep && g.keep.path) || '';
+      keepEl.appendChild(keepTag);
+      keepEl.appendChild(keepTxt);
+      gEl.appendChild(keepEl);
+
+      (g.remove || []).forEach(r => {
+        const row = document.createElement('div');
+        row.className = 'dedup-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.dataset.path = r.path;
+        const txt = document.createElement('span');
+        txt.className = 'dedup-path';
+        txt.textContent = dedupLabel(r);
+        txt.title = r.path || '';
+        row.appendChild(cb);
+        row.appendChild(txt);
+        gEl.appendChild(row);
+        boxes.push(cb);
+      });
+
+      dedupPanel.appendChild(gEl);
+    });
+
+    const footer = document.createElement('div');
+    footer.className = 'dedup-footer';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn del';
+    const result = document.createElement('span');
+    result.className = 'dedup-result';
+
+    function refreshLabel() {
+      const n = boxes.filter(b => b.checked).length;
+      delBtn.textContent = 'Delete ' + n + ' file' + (n === 1 ? '' : 's');
+      delBtn.disabled = n === 0;
+    }
+    boxes.forEach(b => { b.onchange = refreshLabel; });
+    refreshLabel();
+
+    delBtn.onclick = async () => {
+      const paths = boxes.filter(b => b.checked).map(b => b.dataset.path);
+      if (!paths.length) return;
+      delBtn.disabled = true;
+      result.textContent = 'deleting…';
+      try {
+        const r = await API('/library/dedup/delete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({paths}),
+        });
+        const nDel = (r.deleted || []).length;
+        const nErr = (r.errors || []).length;
+        result.textContent = nDel + ' deleted' + (nErr ? (', ' + nErr + ' failed') : '');
+        dedupCard._statusSpan.textContent = 'rescan to refresh';
+        const done = new Set(r.deleted || []);
+        boxes.forEach(b => {
+          if (done.has(b.dataset.path)) {
+            b.checked = false;
+            b.disabled = true;
+            b.parentElement.classList.add('gone');
+          }
+        });
+        refreshLabel();
+      } catch(e) {
+        result.textContent = 'Error: ' + (e.message || 'unknown');
+        delBtn.disabled = false;
+      }
+    };
+
+    footer.appendChild(delBtn);
+    footer.appendChild(result);
+    dedupPanel.appendChild(footer);
+  }
+
+  function dedupLabel(rec) {
+    if (!rec) return '';
+    const name = (rec.path || '').split('/').pop();
+    const who = [rec.artist, rec.title].filter(Boolean).join(' — ');
+    return who ? (who + '  ·  ' + name) : name;
+  }
 
   // ── 4. Title cleanup ──────────────────────────────────────────────────────────
   let suffixesExpanded = false;
