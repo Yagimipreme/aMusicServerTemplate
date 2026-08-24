@@ -2087,14 +2087,32 @@ def sc_search_tracks():
 
 @app.route("/sc/preview", methods=["GET"])
 def sc_preview():
-    stream_url = request.args.get("stream_url", "")
-    if not stream_url:
-        return jsonify({"status": "error", "error": "stream_url required"}), 400
+    """Resolve a SoundCloud progressive transcoding to a directly playable CDN mp3.
+
+    SoundCloud's progressive transcoding endpoint answers {"url": "<signed CDN mp3>"}
+    when queried with a valid client_id. HLS manifests are never proxied — a track
+    with no progressive transcoding is simply reported unavailable.
+    """
+    progressive_url = (request.args.get("progressive_url")
+                       or request.args.get("stream_url") or "").strip()
+    if not progressive_url:
+        return jsonify({"status": "error", "error": "progressive_url required"}), 400
     sc = _get_sc_client()
     if not sc:
         return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
-    composed = f"{stream_url}?client_id={sc.client_id}"
-    return jsonify({"status": "ok", "stream_url": composed})
+    try:
+        import requests
+        resp = requests.get(progressive_url,
+                            params={"client_id": sc.client_id},
+                            timeout=10)
+        resp.raise_for_status()
+        cdn_url = (resp.json() or {}).get("url") or ""
+        if not cdn_url:
+            return jsonify({"status": "unavailable", "reason": "no progressive stream"})
+        return jsonify({"status": "ok", "stream_url": cdn_url})
+    except Exception as e:
+        logger.exception("[SC] preview resolve failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @app.route("/sc/set/<int:set_id>/tracks", methods=["GET"])
@@ -2221,7 +2239,7 @@ def preview():
             query = url if url else f"ytsearch:{artist} {title}"
             try:
                 result = subprocess.run(
-                    [".venv/bin/yt-dlp", "--dump-json", "-f", "bestaudio/best",
+                    [_YT_DLP, "--dump-json", "-f", "bestaudio/best",
                      "--no-playlist", query],
                     capture_output=True, text=True, timeout=20,
                     cwd=_PROJECT_ROOT,

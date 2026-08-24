@@ -1474,3 +1474,80 @@ def test_genres_vocab_cached_second_call(client, monkeypatch, tmp_path):
         client.get("/genres/vocab")
         client.get("/genres/vocab")
     assert len(calls) == 1
+
+
+# ── /sc/preview (progressive resolution) ──────────────────────────────────────
+
+def _sc_client_stub(client_id="CID"):
+    return MagicMock(client_id=client_id)
+
+
+def test_sc_preview_resolves_progressive_to_cdn_url(client):
+    resp_stub = MagicMock()
+    resp_stub.json.return_value = {"url": "https://cf-media.sndcdn.com/x.mp3?Policy=abc"}
+    resp_stub.raise_for_status.return_value = None
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
+         patch("requests.get", return_value=resp_stub) as rget:
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["stream_url"] == "https://cf-media.sndcdn.com/x.mp3?Policy=abc"
+    assert rget.call_args.kwargs["params"]["client_id"] == "CID"
+
+
+def test_sc_preview_unavailable_without_progressive_url(client):
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()):
+        resp = client.get("/sc/preview?progressive_url=")
+    assert resp.status_code == 400
+
+
+def test_sc_preview_unavailable_when_sc_returns_no_url(client):
+    resp_stub = MagicMock()
+    resp_stub.json.return_value = {}
+    resp_stub.raise_for_status.return_value = None
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
+         patch("requests.get", return_value=resp_stub):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "unavailable"
+
+
+def test_sc_preview_unavailable_without_client(client):
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=None):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "unavailable"
+
+
+def test_sc_preview_error_on_upstream_exception(client):
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
+         patch("requests.get", side_effect=Exception("boom")):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 500
+    assert json.loads(resp.data)["status"] == "error"
+
+
+def test_sc_preview_accepts_legacy_stream_url_param(client):
+    resp_stub = MagicMock()
+    resp_stub.json.return_value = {"url": "https://cf-media.sndcdn.com/y.mp3"}
+    resp_stub.raise_for_status.return_value = None
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
+         patch("requests.get", return_value=resp_stub):
+        resp = client.get("/sc/preview?stream_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert json.loads(resp.data)["stream_url"] == "https://cf-media.sndcdn.com/y.mp3"
+
+
+def test_preview_route_uses_resolved_yt_dlp_binary(client):
+    """/preview must invoke _YT_DLP, never a hardcoded .venv path."""
+    import sWebExt.py_server.server as srv
+    import subprocess as _sp
+    completed = _sp.CompletedProcess(
+        args=[], returncode=0,
+        stdout=json.dumps({"url": "https://stream", "title": "T", "uploader": "A"}),
+        stderr="")
+    with patch("subprocess.run", return_value=completed) as srun:
+        resp = client.get("/preview?source=yt&artist=a&title=t")
+    assert resp.status_code == 200
+    assert srun.call_args.args[0][0] == srv._YT_DLP
+    assert ".venv/bin/yt-dlp" not in srun.call_args.args[0][0]
