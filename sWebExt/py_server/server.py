@@ -2085,6 +2085,27 @@ def sc_search_tracks():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+_SC_API_HOST = "api-v2.soundcloud.com"
+
+
+def _sc_api_path(url: str):
+    """Validate `url` is an https://api-v2.soundcloud.com URL and return its
+    path (+ query, as a params dict) — or None if it isn't.
+
+    Exact hostname match only (not startswith/substring — a check like
+    url.startswith("https://api-v2.soundcloud.com") is bypassable with
+    https://api-v2.soundcloud.com.evil.com/...). Caller-supplied progressive_url
+    values must never be fetched directly (SSRF): this is only ever used to
+    build a path for the authenticated SCClient, which is pinned to the same
+    fixed API host regardless of what's passed here.
+    """
+    import urllib.parse as _up
+    parsed = _up.urlsplit(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != _SC_API_HOST:
+        return None
+    return parsed.path, dict(_up.parse_qsl(parsed.query))
+
+
 @app.route("/sc/preview", methods=["GET"])
 def sc_preview():
     """Resolve a SoundCloud progressive transcoding to a directly playable CDN mp3.
@@ -2097,16 +2118,21 @@ def sc_preview():
                        or request.args.get("stream_url") or "").strip()
     if not progressive_url:
         return jsonify({"status": "error", "error": "progressive_url required"}), 400
+
+    parsed = _sc_api_path(progressive_url)
+    if parsed is None:
+        return jsonify({"status": "error", "error": "progressive_url must be an "
+                        f"https://{_SC_API_HOST} URL"}), 400
+    path, params = parsed
+
     sc = _get_sc_client()
     if not sc:
         return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
     try:
-        import requests
-        resp = requests.get(progressive_url,
-                            params={"client_id": sc.client_id},
-                            timeout=10)
-        resp.raise_for_status()
-        cdn_url = (resp.json() or {}).get("url") or ""
+        # Routed through the authenticated SC client — never a raw unauthenticated
+        # request. sc.get() injects client_id itself and retries once on 401.
+        data = sc.get(path, params) or {}
+        cdn_url = data.get("url") or ""
         if not cdn_url:
             return jsonify({"status": "unavailable", "reason": "no progressive stream"})
         return jsonify({"status": "ok", "stream_url": cdn_url})

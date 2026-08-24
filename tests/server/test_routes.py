@@ -1478,22 +1478,29 @@ def test_genres_vocab_cached_second_call(client, monkeypatch, tmp_path):
 
 # ── /sc/preview (progressive resolution) ──────────────────────────────────────
 
-def _sc_client_stub(client_id="CID"):
-    return MagicMock(client_id=client_id)
+def _sc_client_stub(client_id="CID", get_return=None, get_side_effect=None):
+    """SCClient stub — sc_preview must route through sc.get(path), which
+    injects client_id and handles 401 refresh itself, never a raw
+    unauthenticated requests.get() call."""
+    stub = MagicMock(client_id=client_id)
+    if get_side_effect is not None:
+        stub.get.side_effect = get_side_effect
+    else:
+        stub.get.return_value = get_return if get_return is not None else {}
+    return stub
 
 
 def test_sc_preview_resolves_progressive_to_cdn_url(client):
-    resp_stub = MagicMock()
-    resp_stub.json.return_value = {"url": "https://cf-media.sndcdn.com/x.mp3?Policy=abc"}
-    resp_stub.raise_for_status.return_value = None
-    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
-         patch("requests.get", return_value=resp_stub) as rget:
+    sc = _sc_client_stub(get_return={"url": "https://cf-media.sndcdn.com/x.mp3?Policy=abc"})
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
         resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
     assert resp.status_code == 200
     data = json.loads(resp.data)
     assert data["status"] == "ok"
     assert data["stream_url"] == "https://cf-media.sndcdn.com/x.mp3?Policy=abc"
-    assert rget.call_args.kwargs["params"]["client_id"] == "CID"
+    # Routed through the authenticated SC client, not a raw requests.get —
+    # sc.get() injects client_id and retries on 401 itself.
+    assert sc.get.call_args.args[0] == "/media/1/progressive"
 
 
 def test_sc_preview_unavailable_without_progressive_url(client):
@@ -1503,11 +1510,8 @@ def test_sc_preview_unavailable_without_progressive_url(client):
 
 
 def test_sc_preview_unavailable_when_sc_returns_no_url(client):
-    resp_stub = MagicMock()
-    resp_stub.json.return_value = {}
-    resp_stub.raise_for_status.return_value = None
-    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
-         patch("requests.get", return_value=resp_stub):
+    sc = _sc_client_stub(get_return={})
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
         resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
     assert resp.status_code == 200
     assert json.loads(resp.data)["status"] == "unavailable"
@@ -1521,21 +1525,47 @@ def test_sc_preview_unavailable_without_client(client):
 
 
 def test_sc_preview_error_on_upstream_exception(client):
-    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
-         patch("requests.get", side_effect=Exception("boom")):
+    sc = _sc_client_stub(get_side_effect=Exception("boom"))
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
         resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
     assert resp.status_code == 500
     assert json.loads(resp.data)["status"] == "error"
 
 
 def test_sc_preview_accepts_legacy_stream_url_param(client):
-    resp_stub = MagicMock()
-    resp_stub.json.return_value = {"url": "https://cf-media.sndcdn.com/y.mp3"}
-    resp_stub.raise_for_status.return_value = None
-    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()), \
-         patch("requests.get", return_value=resp_stub):
+    sc = _sc_client_stub(get_return={"url": "https://cf-media.sndcdn.com/y.mp3"})
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
         resp = client.get("/sc/preview?stream_url=https://api-v2.soundcloud.com/media/1/progressive")
     assert json.loads(resp.data)["stream_url"] == "https://cf-media.sndcdn.com/y.mp3"
+
+
+# ── /sc/preview SSRF guard ──────────────────────────────────────────────────
+
+def test_sc_preview_rejects_non_soundcloud_host(client):
+    sc = _sc_client_stub()
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=http://169.254.169.254/latest/meta-data/")
+    assert resp.status_code == 400
+    assert sc.get.called is False
+
+
+def test_sc_preview_rejects_lookalike_host_suffix_bypass(client):
+    """A naive startswith()/`in` host check is bypassable by suffixing the
+    real host onto an attacker-controlled domain — must be an exact hostname
+    match, not a prefix/substring match."""
+    sc = _sc_client_stub()
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com.evil.com/x")
+    assert resp.status_code == 400
+    assert sc.get.called is False
+
+
+def test_sc_preview_rejects_non_https_scheme(client):
+    sc = _sc_client_stub()
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=http://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 400
+    assert sc.get.called is False
 
 
 
