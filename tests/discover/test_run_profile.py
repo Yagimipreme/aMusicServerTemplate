@@ -378,6 +378,33 @@ def test_genre_mode_does_not_call_similar_or_listener_floor(tmp_path, monkeypatc
 
 # ── sync_playlist wiring (merge-aware API playlists) ─────────────────────────
 
+def test_run_profile_includes_library_picks_in_playlist_sync(tmp_path, monkeypatch):
+    """Library-blend picks (lib_paths) already carry real Navidrome song ids
+    from select_library_tracks — dropping them from sync_playlist means any
+    mix with new_ratio<1.0 loses its library tracks in the synced playlist."""
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    library_songs = [
+        {"id": "lib1", "artist": "X", "title": "T1", "path": str(tmp_path / "t1.mp3"), "played": None},
+        {"id": "lib2", "artist": "Y", "title": "T2", "path": str(tmp_path / "t2.mp3"), "played": None},
+    ]
+    deps, downloaded = build_deps(tmp_path, library_songs=library_songs)
+    seen = {}
+
+    def fake_sync(subsonic, name, new_paths, ledger, cap, **kw):
+        seen["new_paths"] = list(new_paths)
+        seen["known_ids"] = list(kw.get("known_ids") or [])
+        ledger["owned"] = list(new_paths) + seen["known_ids"]
+        return {"status": "ok", "playlist_id": "p1", "added": len(new_paths),
+                "evicted": 0, "pending": 0, "migrated": True,
+                "final_count": len(new_paths)}
+
+    monkeypatch.setattr("discover.playlist_sync.sync_playlist", fake_sync)
+    profile = make_profile(count=2, cap=10, new_ratio=0.0, mode="genre", genres=["ambient"])
+    result = run_profile(deps, make_cfg(), profile)
+    assert result["library_added"] > 0
+    assert "lib1" in seen["known_ids"] or "lib2" in seen["known_ids"]
+
+
 def test_run_profile_uses_sync_playlist_when_api_available(tmp_path, monkeypatch):
     monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
     deps, downloaded = build_deps(tmp_path)

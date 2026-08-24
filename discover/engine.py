@@ -302,6 +302,7 @@ def run_profile(deps, cfg, profile):
 
     # library share + backfill of any new-share shortfall
     lib_paths = []
+    lib_ids = []
     lib_needed = count - len(acquired_paths) if lib_count > 0 or len(acquired_paths) < new_count else 0
     lib_needed = min(lib_needed, count - len(acquired_paths))
     if lib_needed > 0:
@@ -311,6 +312,11 @@ def run_profile(deps, cfg, profile):
                                       seed_artists=seed_artist_names,
                                       song_dir=deps.song_dir)
         lib_paths = [s["path"] for s in picks]
+        # Library picks are already Navidrome songs — select_library_tracks
+        # returns the raw search3/getSongsByGenre records, which carry a real
+        # song id. Pass those straight through to sync_playlist so the merge-
+        # aware API path doesn't drop them (they never went through m3u/download).
+        lib_ids = [s["id"] for s in picks if s.get("id")]
 
     # acquisition backfill: if library underdelivered, acquire more from fresh pool (spec §3b)
     lib_shortfall = lib_needed - len(lib_paths)
@@ -335,7 +341,7 @@ def run_profile(deps, cfg, profile):
             ledger = deps.state.playlist_ledger(profile["name"])
             playlist_result = sync_playlist(
                 deps.subsonic, profile["name"], acquired_paths, ledger, cap,
-                song_dir=deps.song_dir)
+                song_dir=deps.song_dir, known_ids=lib_ids)
         else:
             logger.warning("discover: no Navidrome playlist API available — "
                            "falling back to the m3u writer for %r", profile["name"])

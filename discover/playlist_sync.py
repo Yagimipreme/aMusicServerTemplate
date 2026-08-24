@@ -215,12 +215,17 @@ def _blank_ledger() -> dict:
 
 
 def sync_playlist(subsonic, name, new_paths, ledger, cap,
-                  song_dir=None, tag_reader=None, wait_fn=None):
+                  song_dir=None, tag_reader=None, wait_fn=None, known_ids=None):
     """Merge this run's new tracks into the named Navidrome playlist.
 
     Never touches user-added tracks, never re-adds tracks the user deleted, and
     caps only the engine-owned share. Mutates `ledger` in place; the caller
     persists it.
+
+    known_ids -- song ids that are already resolved Navidrome ids (e.g.
+    library-blend picks from select_library_tracks, which already carry a
+    real song id) and should be merged in directly without going through
+    resolve_paths' path->id lookup.
     """
     wait_fn = wait_fn or wait_for_scan
     for k, v in _blank_ledger().items():
@@ -243,6 +248,12 @@ def sync_playlist(subsonic, name, new_paths, ledger, cap,
         candidates = list(ledger.get("pending") or []) + list(new_paths or [])
         new_ids, unresolved = resolve_paths(subsonic, candidates, tag_reader=tag_reader)
         ledger["pending"] = unresolved
+
+        # merge in ids that arrived already resolved — no point re-resolving
+        # a library pick's own Navidrome song id via a title/artist search.
+        for kid in (known_ids or []):
+            if kid and kid not in new_ids:
+                new_ids.append(kid)
 
         # 4. locate (or create) the playlist
         pid = ledger.get("playlist_id") or subsonic.find_playlist_id(name)
