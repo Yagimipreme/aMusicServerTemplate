@@ -546,6 +546,65 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
   sizeRow.appendChild(capInput);
   inner.appendChild(sizeRow);
 
+  // Advanced (per-mix quality overrides — blank field = inherit global default)
+  const advWrap = document.createElement('div');
+  advWrap.className = 'adv-wrap';
+  const advToggle = document.createElement('div');
+  advToggle.className = 'adv-toggle';
+  advToggle.textContent = '▸ advanced';
+  const advBody = document.createElement('div');
+  advBody.className = 'adv-body';
+  advBody.style.display = 'none';
+  advToggle.onclick = () => {
+    const open = advBody.style.display === 'none';
+    advBody.style.display = open ? '' : 'none';
+    advToggle.textContent = (open ? '▾' : '▸') + ' advanced';
+  };
+
+  const q = mix.quality || {};
+  const qInputs = {};
+
+  function advNumRow(key, label, placeholder) {
+    const row = document.createElement('div');
+    row.className = 'frow';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const inp = document.createElement('input');
+    inp.className = 'txt';
+    inp.type = 'number';
+    inp.placeholder = placeholder;
+    inp.value = (q[key] === undefined || q[key] === null) ? '' : String(q[key]);
+    row.appendChild(lab);
+    row.appendChild(inp);
+    advBody.appendChild(row);
+    qInputs[key] = inp;
+  }
+
+  advNumRow('min_artist_listeners', 'min listeners', 'inherit (5000)');
+  advNumRow('candidate_oversample', 'oversample',    'inherit (3)');
+  advNumRow('seed_artist_count',    'seed artists',  'inherit (20)');
+
+  const perRow = document.createElement('div');
+  perRow.className = 'frow';
+  const perLab = document.createElement('label');
+  perLab.textContent = 'lastfm period';
+  const perSel = document.createElement('select');
+  [['', 'inherit'], ['7day', '7day'], ['1month', '1month'], ['3month', '3month'],
+   ['6month', '6month'], ['12month', '12month'], ['overall', 'overall']].forEach(([v, t]) => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = t;
+    if ((q.lastfm_period || '') === v) o.selected = true;
+    perSel.appendChild(o);
+  });
+  perRow.appendChild(perLab);
+  perRow.appendChild(perSel);
+  advBody.appendChild(perRow);
+
+  advWrap.appendChild(advToggle);
+  advWrap.appendChild(advBody);
+  inner.appendChild(advWrap);
+
   // Actions row
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -611,6 +670,20 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
     const resolvedId   = isNew ? (idInput   ? idInput.value   : mix.id)   : mix.id;
     const resolvedName = isNew ? (nameInput ? nameInput.value : mix.name) : mix.name;
 
+    // Advanced: only include fields the user actually filled in; anything else
+    // is omitted so the engine falls through to the global cfg["discover"] default.
+    const quality = {};
+    Object.keys(mix.quality || {}).forEach(k => {
+      if (!(k in qInputs) && k !== 'lastfm_period') quality[k] = mix.quality[k];  // preserve keys with no UI (e.g. lastfm_periods)
+    });
+    ['min_artist_listeners', 'candidate_oversample', 'seed_artist_count'].forEach(k => {
+      const raw = (qInputs[k].value || '').trim();
+      if (raw === '') return;
+      const n = parseInt(raw, 10);
+      if (!Number.isNaN(n)) quality[k] = n;
+    });
+    if (perSel.value) quality.lastfm_period = perSel.value;
+
     const profile = {
       id:             resolvedId,
       name:           resolvedName,
@@ -630,7 +703,7 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
         artists:  modeSel.value === 'manual'   ? [...artists]      : ((mix.seeds || {}).artists || []),
         playlist: modeSel.value === 'playlist' ? playlistInput.value : '',
       },
-      quality: mix.quality || {},
+      quality: quality,
     };
 
     try {
