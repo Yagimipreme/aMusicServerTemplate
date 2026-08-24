@@ -169,3 +169,75 @@ def test_resolve_paths_survives_search_exception():
                                     tag_reader=_tags({"/m/1.mp3": ("A", "T")}))
     assert ids == []
     assert unresolved == ["/m/1.mp3"]
+
+
+from discover.playlist_sync import migrate_from_m3u
+
+
+def _fake_sub(existing_id=None, songs=None, created="NEW"):
+    state = {"deleted": [], "created": None}
+    songs = songs or []
+
+    def search_songs(query, count=5):
+        return songs
+
+    sub = SimpleNamespace(
+        find_playlist_id=lambda name: existing_id,
+        delete_playlist=lambda pid: state["deleted"].append(pid) or True,
+        create_playlist=lambda name, ids: state.__setitem__("created", (name, list(ids))) or created,
+        search_songs=search_songs,
+        start_scan=lambda: True,
+        get_scan_status=lambda: {"scanning": False, "count": 0},
+    )
+    return sub, state
+
+
+def test_migrate_renames_m3u_to_bak_and_never_deletes_it(tmp_path):
+    m3u = tmp_path / "Weekly Mix.m3u"
+    m3u.write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
+    sub, state = _fake_sub(existing_id="7",
+                           songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert r["migrated"] is True
+    assert not m3u.exists()
+    assert (tmp_path / "Weekly Mix.m3u.bak").read_text(encoding="utf-8").startswith("#EXTM3U")
+    assert r["backup"].endswith(".m3u.bak")
+
+
+def test_migrate_deletes_the_old_api_playlist_first(tmp_path):
+    (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
+    sub, state = _fake_sub(existing_id="7",
+                           songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
+    migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert state["deleted"] == ["7"]
+
+
+def test_migrate_seeds_new_playlist_and_marks_tracks_owned(tmp_path):
+    (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\na.mp3\nb.mp3\n", encoding="utf-8")
+
+    def search_songs(query, count=5):
+        base = query
+        return [{"id": "id-" + base, "title": "", "artist": "", "path": "lib/" + base + ".mp3"}]
+
+    sub, state = _fake_sub(existing_id=None)
+    sub.search_songs = search_songs
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert state["created"][0] == "Weekly Mix"
+    assert state["created"][1] == ["id-a", "id-b"]
+    assert r["owned"] == ["id-a", "id-b"]
+    assert r["playlist_id"] == "NEW"
+
+
+def test_migrate_is_a_noop_without_an_m3u(tmp_path):
+    sub, state = _fake_sub()
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert r["migrated"] is False
+    assert state["deleted"] == [] and state["created"] is None
+
+
+def test_migrate_sanitizes_the_playlist_name_for_the_filename(tmp_path):
+    (tmp_path / "Odd_Name.m3u").write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
+    sub, state = _fake_sub(songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
+    r = migrate_from_m3u(sub, "Odd/Name", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert r["migrated"] is True
+    assert (tmp_path / "Odd_Name.m3u.bak").exists()

@@ -8,6 +8,7 @@ discover/state.py keeps them from being immediately rediscovered.
 """
 import logging
 import os
+import re
 import time
 
 logger = logging.getLogger(__name__)
@@ -146,3 +147,64 @@ def resolve_paths(subsonic, paths, tag_reader=None):
             ids.append(sid)
 
     return ids, unresolved
+
+
+def _m3u_path(song_dir: str, name: str) -> str:
+    safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+    return os.path.join(song_dir, safe + ".m3u")
+
+
+def migrate_from_m3u(subsonic, name, song_dir, tag_reader=None, wait_fn=None):
+    """One-time migration of an m3u-backed playlist to an API playlist.
+
+    Deletes the imported playlist via the API, renames the .m3u to .m3u.bak
+    (never deletes it), rescans so Navidrome forgets it, then recreates the
+    playlist through the API seeded with the old contents.
+    """
+    wait_fn = wait_fn or wait_for_scan
+    result = {"migrated": False, "playlist_id": "", "owned": [], "backup": ""}
+
+    m3u = _m3u_path(song_dir, name)
+    if not os.path.exists(m3u):
+        return result
+
+    from discover.assemble import read_playlist_basenames
+    basenames = read_playlist_basenames(song_dir, name)
+
+    try:
+        old_id = subsonic.find_playlist_id(name)
+    except Exception:
+        logger.exception("playlist_sync: could not look up %r before migration", name)
+        old_id = None
+    if old_id:
+        try:
+            subsonic.delete_playlist(old_id)
+        except Exception:
+            logger.exception("playlist_sync: could not delete old playlist %s", old_id)
+
+    backup = m3u + ".bak"
+    try:
+        os.replace(m3u, backup)
+        result["backup"] = backup
+    except Exception:
+        logger.exception("playlist_sync: could not rename %s — aborting migration", m3u)
+        return result
+
+    wait_fn(subsonic)
+
+    ids, unresolved = resolve_paths(subsonic,
+                                    [os.path.join(song_dir, b) for b in basenames],
+                                    tag_reader=tag_reader)
+    if unresolved:
+        logger.warning("playlist_sync: %d of %d migrated tracks unresolved for %r",
+                       len(unresolved), len(basenames), name)
+    try:
+        new_id = subsonic.create_playlist(name, ids)
+    except Exception:
+        logger.exception("playlist_sync: could not create migrated playlist %r", name)
+        return result
+
+    result.update({"migrated": True, "playlist_id": new_id or "", "owned": ids})
+    logger.info("playlist_sync: migrated %r from m3u — %d tracks seeded, backup at %s",
+                name, len(ids), backup)
+    return result
