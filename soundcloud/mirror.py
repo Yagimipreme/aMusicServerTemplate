@@ -4,14 +4,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 _HLS_PROTOCOL = "hls"
+_PROGRESSIVE_PROTOCOL = "progressive"
+
+
+def _first_url_for_protocol(transcodings: list, protocol: str) -> str:
+    for t in (transcodings or []):
+        if (t.get("format") or {}).get("protocol") == protocol:
+            return t.get("url", "") or ""
+    return ""
 
 
 def _first_hls_url(transcodings: list) -> str:
     """Pick the first HLS transcoding URL."""
-    for t in transcodings:
-        if t.get("format", {}).get("protocol") == _HLS_PROTOCOL:
-            return t.get("url", "")
-    return ""
+    return _first_url_for_protocol(transcodings, _HLS_PROTOCOL)
 
 
 def _track_from_raw(raw: dict) -> dict:
@@ -21,6 +26,7 @@ def _track_from_raw(raw: dict) -> dict:
         "title": raw.get("title", ""),
         "artist": (raw.get("user") or {}).get("username", ""),
         "stream_url": _first_hls_url(transcodings),
+        "progressive_url": _first_url_for_protocol(transcodings, _PROGRESSIVE_PROTOCOL),
         "permalink_url": raw.get("permalink_url", ""),
         "artwork_url": raw.get("artwork_url") or "",
         "duration_ms": raw.get("duration", 0),

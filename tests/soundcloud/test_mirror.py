@@ -91,3 +91,48 @@ def test_user_from_raw_permalink_defaults_empty():
     user = _user_from_raw({"id": 1, "username": "x"})
     assert user["permalink"] == ""
     assert user["permalink_url"] == ""
+
+
+def test_track_from_raw_captures_progressive_url():
+    from soundcloud.mirror import _track_from_raw
+    t = _track_from_raw({
+        "id": 1, "title": "T", "user": {"username": "A"},
+        "media": {"transcodings": [
+            {"url": "https://api-v2.soundcloud.com/media/1/hls",
+             "format": {"protocol": "hls"}},
+            {"url": "https://api-v2.soundcloud.com/media/1/progressive",
+             "format": {"protocol": "progressive"}},
+        ]},
+    })
+    assert t["progressive_url"] == "https://api-v2.soundcloud.com/media/1/progressive"
+    assert t["stream_url"] == "https://api-v2.soundcloud.com/media/1/hls"
+
+
+def test_track_from_raw_progressive_url_empty_when_hls_only():
+    from soundcloud.mirror import _track_from_raw
+    t = _track_from_raw({
+        "id": 1, "title": "T", "user": {"username": "A"},
+        "media": {"transcodings": [
+            {"url": "https://api-v2.soundcloud.com/media/1/hls",
+             "format": {"protocol": "hls"}},
+        ]},
+    })
+    assert t["progressive_url"] == ""
+
+
+def test_track_from_raw_progressive_url_empty_when_no_media():
+    from soundcloud.mirror import _track_from_raw
+    t = _track_from_raw({"id": 1, "title": "T", "user": {"username": "A"}})
+    assert t["progressive_url"] == ""
+
+
+def test_track_from_raw_takes_first_progressive_transcoding():
+    from soundcloud.mirror import _track_from_raw
+    t = _track_from_raw({
+        "id": 1, "title": "T", "user": {"username": "A"},
+        "media": {"transcodings": [
+            {"url": "https://p1", "format": {"protocol": "progressive"}},
+            {"url": "https://p2", "format": {"protocol": "progressive"}},
+        ]},
+    })
+    assert t["progressive_url"] == "https://p1"
