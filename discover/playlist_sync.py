@@ -157,12 +157,16 @@ def _m3u_path(song_dir: str, name: str) -> str:
 def migrate_from_m3u(subsonic, name, song_dir, tag_reader=None, wait_fn=None):
     """One-time migration of an m3u-backed playlist to an API playlist.
 
-    Deletes the imported playlist via the API, renames the .m3u to .m3u.bak
-    (never deletes it), rescans so Navidrome forgets it, then recreates the
-    playlist through the API seeded with the old contents.
+    Nothing destructive happens until the new API playlist is durably created
+    and seeded. Only then do we retire the old m3u-imported playlist: delete
+    it via the API, rename the .m3u to .m3u.bak (never delete it), and rescan
+    so Navidrome forgets the old association — that delete -> rename -> rescan
+    order is the one a live spike confirmed leaves no ghost playlist behind.
+    If create_playlist fails, the old playlist and the .m3u are left exactly
+    as they were, so the caller can safely retry the whole migration later.
     """
     wait_fn = wait_fn or wait_for_scan
-    result = {"migrated": False, "playlist_id": "", "owned": [], "backup": ""}
+    result = {"migrated": False, "playlist_id": "", "owned": [], "backup": "", "pending": []}
 
     m3u = _m3u_path(song_dir, name)
     if not os.path.exists(m3u):
@@ -171,11 +175,32 @@ def migrate_from_m3u(subsonic, name, song_dir, tag_reader=None, wait_fn=None):
     from discover.assemble import read_playlist_basenames
     basenames = read_playlist_basenames(song_dir, name)
 
+    # Look up the OLD playlist's id first — before creating the new one, which
+    # shares the same name and would otherwise be ambiguous with a post-hoc lookup.
     try:
         old_id = subsonic.find_playlist_id(name)
     except Exception:
         logger.exception("playlist_sync: could not look up %r before migration", name)
         old_id = None
+
+    # Resolve the migrated tracks — non-destructive, safe to fail and retry.
+    ids, unresolved = resolve_paths(subsonic,
+                                    [os.path.join(song_dir, b) for b in basenames],
+                                    tag_reader=tag_reader)
+    if unresolved:
+        logger.warning("playlist_sync: %d of %d migrated tracks unresolved for %r — "
+                       "queued for retry", len(unresolved), len(basenames), name)
+
+    # Create + seed the new playlist FIRST. Nothing destructive has happened
+    # yet — on failure we return with the old playlist and .m3u untouched.
+    try:
+        new_id = subsonic.create_playlist(name, ids)
+    except Exception:
+        logger.exception("playlist_sync: could not create migrated playlist %r — "
+                         "aborting, nothing touched", name)
+        return result
+
+    # Only now retire the old m3u-backed playlist.
     if old_id:
         try:
             subsonic.delete_playlist(old_id)
@@ -187,26 +212,14 @@ def migrate_from_m3u(subsonic, name, song_dir, tag_reader=None, wait_fn=None):
         os.replace(m3u, backup)
         result["backup"] = backup
     except Exception:
-        logger.exception("playlist_sync: could not rename %s — aborting migration", m3u)
-        return result
+        logger.exception("playlist_sync: could not rename %s (new playlist %s already created)",
+                         m3u, new_id)
 
     wait_fn(subsonic)
 
-    ids, unresolved = resolve_paths(subsonic,
-                                    [os.path.join(song_dir, b) for b in basenames],
-                                    tag_reader=tag_reader)
-    if unresolved:
-        logger.warning("playlist_sync: %d of %d migrated tracks unresolved for %r",
-                       len(unresolved), len(basenames), name)
-    try:
-        new_id = subsonic.create_playlist(name, ids)
-    except Exception:
-        logger.exception("playlist_sync: could not create migrated playlist %r", name)
-        return result
-
-    result.update({"migrated": True, "playlist_id": new_id or "", "owned": ids})
+    result.update({"migrated": True, "playlist_id": new_id or "", "owned": ids, "pending": unresolved})
     logger.info("playlist_sync: migrated %r from m3u — %d tracks seeded, backup at %s",
-                name, len(ids), backup)
+                name, len(ids), result["backup"])
     return result
 
 
@@ -232,14 +245,17 @@ def sync_playlist(subsonic, name, new_paths, ledger, cap,
         ledger.setdefault(k, v)
 
     try:
-        # 1. one-time migration off the m3u writer
+        # 1. one-time migration off the m3u writer — only mark migrated on
+        # success; a failed attempt (e.g. create_playlist raised) must retry
+        # on the next run rather than being silently skipped forever.
         if not ledger.get("migrated") and song_dir:
             mig = migrate_from_m3u(subsonic, name, song_dir,
                                    tag_reader=tag_reader, wait_fn=wait_fn)
             if mig["migrated"]:
                 ledger["playlist_id"] = mig["playlist_id"]
                 ledger["owned"] = list(mig["owned"])
-            ledger["migrated"] = True   # attempted once, never retried
+                ledger["pending"] = list(ledger.get("pending") or []) + list(mig.get("pending") or [])
+                ledger["migrated"] = True
 
         # 2. make sure this run's downloads are indexed
         wait_fn(subsonic)

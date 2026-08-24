@@ -243,6 +243,60 @@ def test_migrate_sanitizes_the_playlist_name_for_the_filename(tmp_path):
     assert (tmp_path / "Odd_Name.m3u.bak").exists()
 
 
+def test_migrate_aborts_without_touching_old_playlist_or_m3u_if_create_fails(tmp_path):
+    """Nothing destructive may happen until the new playlist is durably
+    created. If create_playlist fails, the old API playlist must still exist
+    and the .m3u must still be at its original path (unrenamed)."""
+    m3u = tmp_path / "Weekly Mix.m3u"
+    m3u.write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
+    sub, state = _fake_sub(existing_id="7",
+                           songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
+
+    def boom(name, ids):
+        raise RuntimeError("nd down")
+    sub.create_playlist = boom
+
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert r["migrated"] is False
+    assert m3u.exists()             # never renamed
+    assert not (tmp_path / "Weekly Mix.m3u.bak").exists()
+    assert state["deleted"] == []   # old playlist never touched
+
+
+def test_migrate_looks_up_old_playlist_before_creating_the_new_one(tmp_path):
+    """find_playlist_id(name) must be called before create_playlist(name, ...)
+    — the new playlist shares the same name, so looking it up afterwards could
+    match the freshly-created playlist instead of the one being retired."""
+    (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
+    sub, state = _fake_sub(existing_id="7",
+                           songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
+    calls = []
+    orig_find = sub.find_playlist_id
+    orig_create = sub.create_playlist
+    sub.find_playlist_id = lambda name: (calls.append("find"), orig_find(name))[1]
+    sub.create_playlist = lambda name, ids: (calls.append("create"), orig_create(name, ids))[1]
+
+    migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert calls.index("find") < calls.index("create")
+    assert state["deleted"] == ["7"]   # the OLD id, not the new one
+
+
+def test_migrate_queues_unresolved_tracks_as_pending(tmp_path):
+    (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\na.mp3\nmissing.mp3\n", encoding="utf-8")
+
+    def search_songs(query, count=5):
+        if query == "a":
+            return [{"id": "id-a", "title": "", "artist": "", "path": "lib/a.mp3"}]
+        return []
+
+    sub, state = _fake_sub(existing_id=None)
+    sub.search_songs = search_songs
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    assert r["migrated"] is True
+    assert r["owned"] == ["id-a"]
+    assert r["pending"] == [str(tmp_path / "missing.mp3")]
+
+
 from discover.playlist_sync import sync_playlist
 
 
@@ -377,6 +431,34 @@ def test_sync_runs_migration_once_then_never_again(tmp_path):
     sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
                   tag_reader=lambda p: ("", ""))
     assert (tmp_path / "Weekly Mix.m3u").exists()   # untouched on the second run
+
+
+def test_sync_does_not_mark_migrated_when_migration_fails(tmp_path):
+    """A failed migration must retry next run, not be permanently skipped —
+    and the old playlist/m3u must survive the failed attempt untouched."""
+    (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
+    sub = FakeSubsonic(playlists={"Weekly Mix": {"id": "old", "ids": ["x"]}}, songs={})
+
+    def boom(name, ids):
+        raise RuntimeError("nd down")
+    sub.create_playlist = boom
+
+    led = _ledger(migrated=False)
+    r = sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
+                      tag_reader=lambda p: ("", ""))
+    assert led["migrated"] is False              # retried next run, not skipped forever
+    assert (tmp_path / "Weekly Mix.m3u").exists()  # old m3u untouched
+    assert "Weekly Mix" in sub.playlists           # old playlist untouched
+
+
+def test_sync_moves_unresolved_migration_tracks_to_pending(tmp_path):
+    (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\nmissing.mp3\n", encoding="utf-8")
+    sub = FakeSubsonic(songs={})   # nothing resolves
+    led = _ledger(migrated=False)
+    sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
+                  tag_reader=lambda p: ("", ""))
+    assert led["migrated"] is True
+    assert str(tmp_path / "missing.mp3") in led["pending"]
 
 
 def test_sync_waits_for_the_scan_before_resolving(tmp_path):
