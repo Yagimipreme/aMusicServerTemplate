@@ -60,10 +60,16 @@ What it contains (all designs were approved in-chat, no spec docs by user choice
 Deviations from plan were cosmetic (CSS class names, a test helper shape) — listed in
 the implementer's report, none change semantics.
 
-**Code review:** first `/code-review` run (high effort) died silently after confirming
-ONE finding — an **import-poll bug in the new shared import-progress UI helper**
-(verified against backend counters). A second run was launched 2026-08-24 evening;
-triage its findings, fix on the worktree branch, re-run tests.
+**Code review: COMPLETE, all findings fixed.** The high-effort review confirmed 10
+findings — headlined by a silent playlist-wiping bug (bracket-indexed `songId[i]`
+params that Navidrome ignores; the unit tests had encoded the same bug) plus a
+destructive migration ordering, a scan race, pending/ledger loss paths, an SSRF hole
+in `/sc/preview`, a never-completing import progress poll, a blocking `/follow/run`,
+and the import path's delete-and-recreate playlist write. All 10 fixed on the branch
+(commits `93c4cec`..`8aa9194`), independently verified: **659 passed / 1 skipped**.
+Seven lower-priority cleanup items (schema duplication, unbounded pending queue, dead
+`_existing_playlist_basenames` helper, duplicated m3u sanitizer) were cut by the
+review's findings cap — candidates for a later `/simplify` pass, not merge blockers.
 
 **Merge/deploy (user decision, not taken yet):** merge branch → `bare_bones`, restart
 `amusicserver`. First scheduled run of each mix after deploy performs the m3u→API
