@@ -449,6 +449,59 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
   cancelBtn.onclick = closeTagEditor;
   inner.appendChild(genreRow);
 
+  // Manual artist chips row (only when mode=manual)
+  const artistRow = document.createElement('div');
+  artistRow.className = 'frow';
+  const artistLabel = document.createElement('label');
+  artistLabel.textContent = 'artists';
+  const artistChips = document.createElement('div');
+  artistChips.className = 'chips';
+  const artists = Array.isArray((mix.seeds || {}).artists) ? [...mix.seeds.artists] : [];
+
+  const artistInput = document.createElement('input');
+  artistInput.className = 'txt';
+  artistInput.type = 'text';
+  artistInput.placeholder = 'artist name… (Enter to add)';
+  artistInput.style.display = 'none';
+
+  function addArtist() {
+    const v = artistInput.value.trim();
+    if (v && !artists.some(a => a.toLowerCase() === v.toLowerCase())) artists.push(v);
+    artistInput.value = '';
+    artistInput.style.display = 'none';
+    renderArtistChips();
+  }
+  artistInput.onkeydown = (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); addArtist(); }
+    else if (ev.key === 'Escape') { artistInput.value = ''; artistInput.style.display = 'none'; renderArtistChips(); }
+  };
+  artistInput.onblur = () => { if (artistInput.value.trim()) addArtist(); else { artistInput.style.display = 'none'; renderArtistChips(); } };
+
+  function renderArtistChips() {
+    artistChips.textContent = '';
+    artists.forEach((a, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = a + ' ✕';
+      chip.onclick = () => { artists.splice(i, 1); renderArtistChips(); };
+      artistChips.appendChild(chip);
+    });
+    const addChip = document.createElement('span');
+    addChip.className = 'chip add';
+    addChip.textContent = '+ add';
+    addChip.onclick = () => {
+      addChip.style.display = 'none';
+      artistInput.style.display = '';
+      artistInput.focus();
+    };
+    artistChips.appendChild(addChip);
+  }
+  renderArtistChips();
+  artistRow.appendChild(artistLabel);
+  artistRow.appendChild(artistChips);
+  inner.appendChild(artistRow);
+  inner.appendChild(artistInput);
+
   // Playlist input row (only when mode=playlist)
   const playlistRow = document.createElement('div');
   playlistRow.className = 'frow';
@@ -465,8 +518,10 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
 
   // Combined mode change handler (genre + playlist visibility)
   function updateModeVisibility() {
-    genreRow.style.display = modeSel.value === 'genre' ? '' : 'none';
+    genreRow.style.display    = modeSel.value === 'genre'    ? '' : 'none';
+    artistRow.style.display   = modeSel.value === 'manual'   ? '' : 'none';
     playlistRow.style.display = modeSel.value === 'playlist' ? '' : 'none';
+    if (modeSel.value !== 'manual') artistInput.style.display = 'none';
   }
   modeSel.onchange = updateModeVisibility;
   updateModeVisibility();
@@ -572,7 +627,7 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
       seeds: {
         mode:     modeSel.value,
         genres:   modeSel.value === 'genre'    ? [...genres]          : [],
-        artists:  (mix.seeds || {}).artists    || [],
+        artists:  modeSel.value === 'manual'   ? [...artists]      : ((mix.seeds || {}).artists || []),
         playlist: modeSel.value === 'playlist' ? playlistInput.value : '',
       },
       quality: mix.quality || {},
