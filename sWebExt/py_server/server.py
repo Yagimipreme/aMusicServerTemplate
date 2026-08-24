@@ -905,6 +905,21 @@ def _run_repair_once(limit=None) -> dict:
         _repair_running.release()
 
 
+def _inside_song_dir(path: str, song_dir: str) -> bool:
+    """True only when `path` resolves to a location strictly inside `song_dir`.
+
+    Uses realpath on both sides so symlinks and ../ traversal cannot escape.
+    """
+    try:
+        root = os.path.realpath(song_dir)
+        target = os.path.realpath(path)
+    except Exception:
+        return False
+    if not root:
+        return False
+    return os.path.commonpath([root, target]) == root and target != root
+
+
 def _run_dedup_once(force_dry_run=False):
     if not _dedup_running.acquire(blocking=False):
         return {"status": "skipped", "reason": "already running"}
@@ -1288,6 +1303,39 @@ def dedup_report():
     result = _run_dedup_once(force_dry_run=True)
     code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
     return jsonify(result), code
+
+
+@app.route("/library/dedup/delete", methods=["POST"])
+def dedup_delete():
+    """Delete an explicit list of duplicate files, validated against song_dir."""
+    body = request.get_json(force=True, silent=True) or {}
+    paths = body.get("paths") or []
+    if not isinstance(paths, list) or not paths:
+        return jsonify({"status": "error", "error": "paths required"}), 400
+
+    cfg = _get_config()
+    song_dir = cfg.get("song_dir", "")
+    if not song_dir:
+        return jsonify({"status": "disabled", "reason": "song_dir not set"}), 503
+
+    deleted, errors = [], []
+    for p in paths:
+        if not isinstance(p, str) or not p:
+            errors.append({"path": str(p), "error": "not a path"})
+            continue
+        if not _inside_song_dir(p, song_dir):
+            errors.append({"path": p, "error": "outside song_dir"})
+            continue
+        if not os.path.isfile(p):
+            errors.append({"path": p, "error": "not a file"})
+            continue
+        try:
+            os.remove(p)
+            deleted.append(p)
+            logger.info("[DEDUP] deleted %s", p)
+        except Exception as e:
+            errors.append({"path": p, "error": str(e)})
+    return jsonify({"status": "ok", "deleted": deleted, "errors": errors})
 
 
 @app.route("/library/enrich", methods=["POST"])

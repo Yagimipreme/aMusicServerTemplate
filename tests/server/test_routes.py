@@ -62,6 +62,75 @@ def test_post_library_dedup_report(client):
     assert resp.status_code == 200
 
 
+# ── /library/dedup/delete ─────────────────────────────────────────────────────
+
+def test_dedup_delete_removes_listed_files(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"
+    song_dir.mkdir()
+    f1 = song_dir / "dup1.mp3"; f1.write_bytes(b"x")
+    f2 = song_dir / "dup2.mp3"; f2.write_bytes(b"x")
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete",
+                           json={"paths": [str(f1), str(f2)]})
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert sorted(data["deleted"]) == sorted([str(f1), str(f2)])
+    assert data["errors"] == []
+    assert not f1.exists() and not f2.exists()
+
+
+def test_dedup_delete_rejects_path_outside_song_dir(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    outside = tmp_path / "secret.mp3"; outside.write_bytes(b"x")
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": [str(outside)]})
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["deleted"] == []
+    assert data["errors"][0]["path"] == str(outside)
+    assert "outside" in data["errors"][0]["error"]
+    assert outside.exists()   # untouched
+
+
+def test_dedup_delete_rejects_traversal(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    outside = tmp_path / "secret.mp3"; outside.write_bytes(b"x")
+    traversal = str(song_dir / ".." / "secret.mp3")
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": [traversal]})
+    assert json.loads(resp.data)["deleted"] == []
+    assert outside.exists()
+
+
+def test_dedup_delete_rejects_directory(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    sub = song_dir / "album"; sub.mkdir()
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": [str(sub)]})
+    assert json.loads(resp.data)["deleted"] == []
+    assert sub.exists()
+
+
+def test_dedup_delete_requires_paths(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": []})
+    assert resp.status_code == 400
+
+
+def test_dedup_delete_disabled_without_song_dir(client):
+    import sWebExt.py_server.server as srv
+    with patch.object(srv, "_get_config", return_value={}):
+        resp = client.post("/library/dedup/delete", json={"paths": ["/x.mp3"]})
+    assert resp.status_code == 503
+    assert json.loads(resp.data)["status"] == "disabled"
+
+
 def test_post_download_dispatcher_no_url(client):
     resp = client.post("/", json={})
     # No matching script: 404
