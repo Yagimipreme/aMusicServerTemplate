@@ -210,7 +210,7 @@ def _run_follow_once() -> dict:
         result = runner.run_once(
             mb_client=mb, lb_client=lb, follows=follows, state=state,
             search_fn=deps.search_fn, download_fn=deps.download_fn,
-            song_dir=deps.song_dir, cfg=fc)
+            song_dir=deps.song_dir, cfg=fc, subsonic=deps.subsonic)
         logger.info("[FOLLOW] run complete: %s", result)
         return {"status": "ok", **result}
     finally:

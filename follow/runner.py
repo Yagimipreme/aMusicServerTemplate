@@ -15,7 +15,7 @@ def _today_iso():
 
 def run_once(mb_client, lb_client, follows, state, search_fn, download_fn,
              song_dir, cfg, resolve_fn=None, acquire_fn=None, assemble_fn=None,
-             push_fn=None, today=None) -> dict:
+             push_fn=None, today=None, subsonic=None) -> dict:
     if resolve_fn is None:
         from discover.resolve import resolve_tracks as resolve_fn
     if acquire_fn is None:
@@ -88,8 +88,17 @@ def run_once(mb_client, lb_client, follows, state, search_fn, download_fn,
             else:
                 state.bump_pending(t["rg_mbid"])
 
+    playlist_result = None
     if paths:
-        assemble_fn(song_dir, paths, playlist_name, playlist_cap)
+        if subsonic is not None and hasattr(subsonic, "replace_playlist"):
+            from discover.playlist_sync import sync_playlist
+            ledger = state.playlist_ledger()
+            playlist_result = sync_playlist(subsonic, playlist_name, paths, ledger,
+                                            playlist_cap, song_dir=song_dir)
+        else:
+            logger.warning("[FOLLOW] no Navidrome playlist API available — "
+                           "falling back to the m3u writer for %r", playlist_name)
+            assemble_fn(song_dir, paths, playlist_name, playlist_cap)
 
     push_fn(summary_lines,
             webhook_url=notify_cfg.get("webhook_url", ""),
@@ -97,4 +106,5 @@ def run_once(mb_client, lb_client, follows, state, search_fn, download_fn,
 
     state.set_runs(last_run=datetime.datetime.now().isoformat())
     state.save()
-    return {"acquired": acquired, "unavailable": unavailable}
+    return {"acquired": acquired, "unavailable": unavailable,
+            "playlist": playlist_result}
