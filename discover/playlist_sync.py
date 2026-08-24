@@ -263,6 +263,11 @@ def sync_playlist(subsonic, name, new_paths, ledger, cap,
     for k, v in _blank_ledger().items():
         ledger.setdefault(k, v)
 
+    # Bound to "everything that still needs writing" from the very first line
+    # inside the try, so the except handler can always safely re-queue it —
+    # nothing is committed to ledger['pending'] until the write below succeeds.
+    candidates = list(ledger.get("pending") or [])
+
     try:
         # 1. one-time migration off the m3u writer — only mark migrated on
         # success; a failed attempt (e.g. create_playlist raised) must retry
@@ -273,16 +278,16 @@ def sync_playlist(subsonic, name, new_paths, ledger, cap,
             if mig["migrated"]:
                 ledger["playlist_id"] = mig["playlist_id"]
                 ledger["owned"] = list(mig["owned"])
-                ledger["pending"] = list(ledger.get("pending") or []) + list(mig.get("pending") or [])
+                candidates = candidates + list(mig.get("pending") or [])
                 ledger["migrated"] = True
 
         # 2. make sure this run's downloads are indexed
         wait_fn(subsonic)
 
-        # 3. resolve pending retries first, then this run's new files
-        candidates = list(ledger.get("pending") or []) + list(new_paths or [])
+        # 3. resolve pending retries first, then this run's new files. Not
+        # committed to the ledger yet — only on a successful write below.
+        candidates = candidates + list(new_paths or [])
         new_ids, unresolved = resolve_paths(subsonic, candidates, tag_reader=tag_reader)
-        ledger["pending"] = unresolved
 
         # merge in ids that arrived already resolved — no point re-resolving
         # a library pick's own Navidrome song id via a title/artist search.
@@ -290,17 +295,32 @@ def sync_playlist(subsonic, name, new_paths, ledger, cap,
             if kid and kid not in new_ids:
                 new_ids.append(kid)
 
-        # 4. locate (or create) the playlist
-        pid = ledger.get("playlist_id") or subsonic.find_playlist_id(name)
+        # 4. locate (or create) the playlist. A ledger playlist_id is not
+        # trusted forever — if the user deleted it directly in Navidrome,
+        # clear the stale id and recreate rather than silently no-op'ing
+        # against a playlist that no longer exists.
+        pid = ledger.get("playlist_id") or ""
+        if pid and not _playlist_exists(subsonic, pid):
+            logger.warning("playlist_sync: ledger playlist_id %s for %r no longer exists in "
+                           "Navidrome — clearing and recreating", pid, name)
+            pid = ""
+        if not pid:
+            pid = subsonic.find_playlist_id(name)
         if not pid:
             pid = subsonic.create_playlist(name, [])
-        ledger["playlist_id"] = pid
         current_ids = subsonic.get_playlist_song_ids(pid) if pid else []
 
-        # 5. merge and write back
+        # 5. merge and write back. replace_playlist's boolean return is
+        # checked — Navidrome can report failure without raising.
         merged = merge_playlist(current_ids, ledger.get("owned") or [], new_ids, cap)
-        subsonic.replace_playlist(pid, merged["final"])
+        wrote = subsonic.replace_playlist(pid, merged["final"])
+        if not wrote:
+            raise RuntimeError(f"replace_playlist reported failure for playlist {pid!r}")
+
+        # Commit to the ledger only now that the write actually succeeded.
+        ledger["playlist_id"] = pid
         ledger["owned"] = merged["owned"]
+        ledger["pending"] = unresolved
 
         logger.info("playlist_sync: %r — %d user, %d engine (+%d new, -%d evicted, %d pending)",
                     name, len(merged["user"]), len(merged["owned"]),
@@ -311,6 +331,28 @@ def sync_playlist(subsonic, name, new_paths, ledger, cap,
                 "final_count": len(merged["final"])}
     except Exception as e:
         logger.exception("playlist_sync: sync failed for %r", name)
+        # Nothing resolved this run was committed — re-queue everything so it
+        # is retried, rather than silently dropping tracks the TTL dedupe
+        # won't let be re-suggested for ~90 days.
+        ledger["pending"] = candidates
         return {"status": "error", "error": str(e), "playlist_id": ledger.get("playlist_id", ""),
                 "added": 0, "evicted": 0, "pending": len(ledger.get("pending") or []),
                 "migrated": ledger.get("migrated", False), "final_count": 0}
+
+
+def _playlist_exists(subsonic, playlist_id: str) -> bool:
+    """True if the given playlist id still exists in Navidrome.
+
+    A lookup failure (transport/network error) fails open — trust the cached
+    id rather than spuriously recreating a duplicate playlist on a transient
+    blip. Navidrome answers a missing id with an empty playlist body rather
+    than raising, so that case is handled by the normal (non-exception) path.
+    """
+    if not playlist_id:
+        return False
+    try:
+        pl = subsonic.get_playlist(playlist_id)
+    except Exception:
+        logger.exception("playlist_sync: could not verify playlist %s exists", playlist_id)
+        return True
+    return bool(pl and pl.get("id"))

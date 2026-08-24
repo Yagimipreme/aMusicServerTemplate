@@ -380,6 +380,12 @@ class FakeSubsonic:
                 return list(pl["ids"])
         return []
 
+    def get_playlist(self, pid):
+        for pl in self.playlists.values():
+            if pl["id"] == pid:
+                return {"id": pid, "entry": [{"id": s} for s in pl["ids"]]}
+        return {}
+
     def create_playlist(self, name, ids):
         pid = "pl-" + name.replace(" ", "-")
         self.playlists[name] = {"id": pid, "ids": list(ids)}
@@ -528,3 +534,70 @@ def test_sync_reports_error_without_crashing_the_run(tmp_path):
     led = _ledger()
     r = sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["status"] == "error"
+
+
+def test_sync_does_not_lose_resolved_tracks_from_pending_on_write_failure(tmp_path):
+    """If replace_playlist raises after paths were successfully resolved this
+    run, nothing may be dropped from the retry queue: the previously-pending
+    path AND this run's newly-resolved-but-unwritten path must both survive,
+    or the suggested-TTL dedupe will silently block rediscovery for ~90 days."""
+    sub = FakeSubsonic(playlists={"Weekly Mix": {"id": "p1", "ids": []}},
+                       songs={"A T": [{"id": "s1", "title": "T", "artist": "A"}]})
+
+    def boom(pid, ids):
+        raise RuntimeError("nd down")
+    sub.replace_playlist = boom
+
+    led = _ledger(playlist_id="p1", pending=["/m/old-pending.mp3"])
+    r = sync_playlist(sub, "Weekly Mix", ["/m/1.mp3"], led, cap=10,
+                      tag_reader=lambda p: ("A", "T"), wait_fn=_instant_wait)
+    assert r["status"] == "error"
+    assert "/m/old-pending.mp3" in led["pending"]
+    assert "/m/1.mp3" in led["pending"]
+    assert led["owned"] == []   # nothing committed — write never actually succeeded
+
+
+def test_sync_does_not_commit_pending_before_playlist_lookup_succeeds(tmp_path):
+    """A failure in find_playlist_id/create_playlist/get_playlist_song_ids
+    (before replace_playlist is even reached) must also leave pending
+    untouched, not just a failure in replace_playlist itself."""
+    sub = FakeSubsonic(songs={"A T": [{"id": "s1", "title": "T", "artist": "A"}]})
+
+    def boom(name):
+        raise RuntimeError("nd down")
+    sub.find_playlist_id = boom
+
+    led = _ledger(pending=["/m/old-pending.mp3"])
+    r = sync_playlist(sub, "Weekly Mix", ["/m/1.mp3"], led, cap=10,
+                      tag_reader=lambda p: ("A", "T"), wait_fn=_instant_wait)
+    assert r["status"] == "error"
+    assert "/m/old-pending.mp3" in led["pending"]
+    assert "/m/1.mp3" in led["pending"]
+
+
+def test_sync_recreates_when_ledger_playlist_id_no_longer_exists(tmp_path):
+    """If the user deletes the playlist directly in Navidrome, the ledger's
+    stale id must be detected and cleared rather than trusted forever — a
+    no-op 'ok' against a vanished playlist silently corrupts the ledger."""
+    sub = FakeSubsonic(songs={"A T": [{"id": "s1", "title": "T", "artist": "A"}]})
+    led = _ledger(playlist_id="gone-id", owned=["old1", "old2"])
+    r = sync_playlist(sub, "Weekly Mix", ["/m/1.mp3"], led, cap=10,
+                      tag_reader=lambda p: ("A", "T"), wait_fn=_instant_wait)
+    assert r["status"] == "ok"
+    assert led["playlist_id"] != "gone-id"
+    assert led["playlist_id"] == "pl-Weekly-Mix"   # freshly created
+    assert led["owned"] == ["s1"]                  # stale owned ids dropped, fresh start
+
+
+def test_sync_treats_false_replace_playlist_return_as_an_error(tmp_path):
+    """replace_playlist's boolean return was never checked — a False (Navidrome
+    reported failure without raising) must not be reported as status ok."""
+    sub = FakeSubsonic(playlists={"Weekly Mix": {"id": "p1", "ids": []}},
+                       songs={"A T": [{"id": "s1", "title": "T", "artist": "A"}]})
+    sub.replace_playlist = lambda pid, ids: False
+
+    led = _ledger(playlist_id="p1")
+    r = sync_playlist(sub, "Weekly Mix", ["/m/1.mp3"], led, cap=10,
+                      tag_reader=lambda p: ("A", "T"), wait_fn=_instant_wait)
+    assert r["status"] == "error"
+    assert led["owned"] == []
