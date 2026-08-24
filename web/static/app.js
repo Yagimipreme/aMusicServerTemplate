@@ -808,6 +808,54 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
 let enrichPollTimer = null;
 let repairPollTimer = null;
 
+// ── Shared batch-import driver (used by the Share and Import cards) ──────────
+async function runImportJob(tracks, playlistName, fillEl, statusEl) {
+  statusEl.textContent = 'queuing ' + tracks.length + ' tracks…';
+  const start = await API('/import/tracks', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tracks, playlist_name: playlistName}),
+  });
+  if (start.status !== 'ok' || !start.job_id) throw new Error(start.error || 'import failed to start');
+
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(async () => {
+      try {
+        const s = await API('/import/status?job_id=' + encodeURIComponent(start.job_id));
+        const total = s.total || 0;
+        const done = s.done || 0;
+        const errs = s.errors || 0;
+        fillEl.style.width = total ? Math.round((done / total) * 100) + '%' : '0%';
+        statusEl.textContent = done + '/' + total + ' done' + (errs ? (' · ' + errs + ' failed') : '');
+        if (total && done >= total) {
+          clearInterval(timer);
+          resolve({total, done, errors: errs});
+        }
+      } catch(e) {
+        clearInterval(timer);
+        reject(e);
+      }
+    }, 2000);
+  });
+}
+
+function renderTrackPreview(container, tracks, limit) {
+  container.textContent = '';
+  const max = limit || 50;
+  tracks.slice(0, max).forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'imp-row';
+    row.textContent = [t.artist, t.title].filter(Boolean).join(' — ') || '(untitled)';
+    container.appendChild(row);
+  });
+  if (tracks.length > max) {
+    const more = document.createElement('div');
+    more.className = 'imp-row imp-more';
+    more.textContent = '…and ' + (tracks.length - max) + ' more';
+    container.appendChild(more);
+  }
+}
+
 async function renderLibrary() {
   if (enrichPollTimer) { clearInterval(enrichPollTimer); enrichPollTimer = null; }
   if (repairPollTimer) { clearInterval(repairPollTimer); repairPollTimer = null; }
@@ -1104,6 +1152,194 @@ async function renderLibrary() {
   suffixWrapper.appendChild(suffixRow);
   suffixWrapper.appendChild(suffixPanel);
   el.appendChild(suffixWrapper);  // appended synchronously
+
+  // ── 5. Share ─────────────────────────────────────────────────────────────────
+  const shareCard = document.createElement('div');
+  shareCard.className = 'tool';
+  shareCard.style.cssText = 'flex-direction:column;align-items:stretch;padding:15px 14px 4px';
+  const shareHead = document.createElement('div');
+  shareHead.className = 't-name';
+  const shareTitle = document.createElement('b');
+  shareTitle.textContent = 'Share';
+  const shareDesc = document.createElement('span');
+  shareDesc.textContent = 'send a playlist to another server, or receive one';
+  shareHead.appendChild(shareTitle);
+  shareHead.appendChild(shareDesc);
+  shareCard.appendChild(shareHead);
+
+  // — Send half —
+  const sendWrap = document.createElement('div');
+  sendWrap.className = 'share-half';
+  const sendLabel = document.createElement('div');
+  sendLabel.className = 'share-sub';
+  sendLabel.textContent = 'send';
+  const plSel = document.createElement('select');
+  plSel.className = 'txt';
+  const codeBtn = document.createElement('button');
+  codeBtn.className = 'btn ghost';
+  codeBtn.textContent = 'get code';
+  const codeArea = document.createElement('textarea');
+  codeArea.className = 'txt share-code';
+  codeArea.rows = 5;
+  codeArea.readOnly = true;
+  codeArea.style.display = 'none';
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'btn ghost';
+  copyBtn.textContent = 'copy';
+  copyBtn.style.display = 'none';
+  const sendStatus = document.createElement('span');
+  sendStatus.className = 'share-status';
+
+  const sendRow = document.createElement('div');
+  sendRow.className = 'frow';
+  sendRow.appendChild(plSel);
+  sendRow.appendChild(codeBtn);
+  sendWrap.appendChild(sendLabel);
+  sendWrap.appendChild(sendRow);
+  sendWrap.appendChild(codeArea);
+  const sendBtnRow = document.createElement('div');
+  sendBtnRow.className = 'frow';
+  sendBtnRow.appendChild(copyBtn);
+  sendBtnRow.appendChild(sendStatus);
+  sendWrap.appendChild(sendBtnRow);
+  shareCard.appendChild(sendWrap);
+
+  codeBtn.onclick = async () => {
+    if (!plSel.value) return;
+    codeBtn.disabled = true;
+    sendStatus.textContent = 'building…';
+    try {
+      const r = await API('/share/code?playlist_id=' + encodeURIComponent(plSel.value));
+      if (r.status !== 'ok') throw new Error(r.error || 'failed');
+      codeArea.value = r.text || '';
+      codeArea.style.display = '';
+      copyBtn.style.display = '';
+      sendStatus.textContent = '';
+    } catch(e) {
+      sendStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      codeBtn.disabled = false;
+    }
+  };
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(codeArea.value);
+      sendStatus.textContent = 'copied';
+    } catch(e) {
+      codeArea.select();
+      sendStatus.textContent = 'select + copy manually';
+    }
+    setTimeout(() => { sendStatus.textContent = ''; }, 2000);
+  };
+
+  // — Receive half —
+  const recvWrap = document.createElement('div');
+  recvWrap.className = 'share-half';
+  const recvLabel = document.createElement('div');
+  recvLabel.className = 'share-sub';
+  recvLabel.textContent = 'receive';
+  const recvArea = document.createElement('textarea');
+  recvArea.className = 'txt';
+  recvArea.rows = 4;
+  recvArea.placeholder = 'paste a share link or a PLAYLIST: block…';
+  const parseBtn = document.createElement('button');
+  parseBtn.className = 'btn ghost';
+  parseBtn.textContent = 'preview';
+  const recvPreview = document.createElement('div');
+  recvPreview.className = 'share-preview';
+  const recvName = document.createElement('input');
+  recvName.className = 'txt';
+  recvName.type = 'text';
+  recvName.placeholder = 'playlist name';
+  recvName.style.display = 'none';
+  const importBtn = document.createElement('button');
+  importBtn.className = 'btn run';
+  importBtn.textContent = 'import';
+  importBtn.style.display = 'none';
+  const recvBar = makeBar();
+  const recvStatus = document.createElement('span');
+  recvStatus.className = 'share-status';
+
+  recvWrap.appendChild(recvLabel);
+  recvWrap.appendChild(recvArea);
+  const recvBtnRow = document.createElement('div');
+  recvBtnRow.className = 'frow';
+  recvBtnRow.appendChild(parseBtn);
+  recvBtnRow.appendChild(recvStatus);
+  recvWrap.appendChild(recvBtnRow);
+  recvWrap.appendChild(recvPreview);
+  const recvGo = document.createElement('div');
+  recvGo.className = 'frow';
+  recvGo.appendChild(recvName);
+  recvGo.appendChild(importBtn);
+  recvWrap.appendChild(recvGo);
+  recvWrap.appendChild(recvBar);
+  shareCard.appendChild(recvWrap);
+  el.appendChild(shareCard);
+
+  let recvTracks = [];
+  parseBtn.onclick = async () => {
+    const text = recvArea.value.trim();
+    if (!text) return;
+    parseBtn.disabled = true;
+    recvStatus.textContent = 'parsing…';
+    recvPreview.textContent = '';
+    try {
+      const r = await API('/share/parse', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text}),
+      });
+      if (r.status !== 'ok') throw new Error(r.error || 'could not parse');
+      recvTracks = r.tracks || [];
+      renderTrackPreview(recvPreview, recvTracks);
+      recvName.value = r.name || 'Shared';
+      recvName.style.display = '';
+      importBtn.style.display = '';
+      recvStatus.textContent = recvTracks.length + ' tracks';
+    } catch(e) {
+      recvStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      parseBtn.disabled = false;
+    }
+  };
+
+  importBtn.onclick = async () => {
+    if (!recvTracks.length) return;
+    importBtn.disabled = true;
+    recvBar.style.display = '';
+    try {
+      const name = (recvName.value || '').trim() || 'Shared';
+      await runImportJob(recvTracks, name, recvBar._inner, recvStatus);
+    } catch(e) {
+      recvStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      importBtn.disabled = false;
+    }
+  };
+
+  // Populate the playlist dropdown (after the synchronous appends, per the
+  // no-double-card convention documented in ROADMAP)
+  try {
+    const pls = await API('/playlists');
+    (pls.playlists || []).forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.name + ' (' + (p.songCount || 0) + ')';
+      plSel.appendChild(o);
+    });
+    if (!(pls.playlists || []).length) sendStatus.textContent = 'no playlists found';
+  } catch(e) {
+    sendStatus.textContent = 'playlists unavailable';
+    codeBtn.disabled = true;
+  }
+
+  // Inbound share payload from /share/import
+  if (window.__pendingShare) {
+    recvArea.value = window.__pendingShare;
+    window.__pendingShare = null;
+    parseBtn.click();
+  }
 
   // ── Async status checks (cards already in DOM, just update text) ─────────────
   async function loadSuffixes() {
@@ -2515,7 +2751,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Follows badge — fetch unseen count on init
   initFollowsBadge();
 
+  // Inbound share link: /share/import redirects here as /?share=<payload>#library
+  const params = new URLSearchParams(location.search);
+  const sharePayload = params.get('share');
+  let forced = null;
+  if (sharePayload) {
+    window.__pendingShare = '?d=' + sharePayload;   // decode() matches [?&]d=
+    forced = 'library';
+    params.delete('share');
+    const qs = params.toString();
+    history.replaceState({}, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+  }
+
   // Initial screen
-  const initial = location.hash.slice(1);
+  const initial = forced || location.hash.slice(1);
   show(screens[initial] ? initial : 'mixes');
 });

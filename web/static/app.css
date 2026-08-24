@@ -203,3 +203,13 @@ svg.chart{display:block;max-width:360px;margin:auto}
 .mp-btn{flex:none;background:none;border:0;color:var(--acid);font-size:.8rem;cursor:pointer;padding:4px 6px}
 .mp-close{color:var(--mut)}
 .mp-close:hover{color:var(--danger)}
+
+/* ---- SHARE / IMPORT CARDS ---- */
+.share-half{border-top:1px solid var(--line);margin-top:10px;padding-top:10px}
+.share-sub{font-family:'JetBrains Mono';font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+.share-code{font-family:'JetBrains Mono';font-size:.6rem;width:100%;resize:vertical}
+.share-status{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}
+.share-preview,.imp-preview{max-height:180px;overflow-y:auto;margin:8px 0}
+.imp-row{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut);padding:2px 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.imp-more{color:var(--acid)}
