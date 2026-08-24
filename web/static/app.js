@@ -2503,16 +2503,36 @@ async function renderFollows() {
   runBtn.className = 'btn run';
   runBtn.style.marginBottom = '10px';
   runBtn.textContent = '▶ run now';
+  // /follow/run dispatches in the background (a run can take minutes via
+  // sync_playlist's playlist scan waits) and answers 'started' immediately —
+  // poll /follow's state.last_run for completion instead of reading
+  // acquired/unavailable off a synchronous response that no longer exists.
+  async function pollFollowRunDone(prevLastRun, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 5 * 60 * 1000);
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 3000));
+      try {
+        const s = await API('/follow');
+        const lastRun = (s.state || {}).last_run;
+        if (lastRun && lastRun !== prevLastRun) return true;
+      } catch(e) {}
+    }
+    return false;
+  }
+
   runBtn.onclick = async () => {
     runBtn.disabled = true;
     runBtn.textContent = '…';
     showStatus(runStatus, 'Running…');
     try {
+      const before = await API('/follow');
+      const prevLastRun = (before.state || {}).last_run;
       const r = await API('/follow/run', {method: 'POST'});
       if (r.status === 'disabled') {
         showStatus(runStatus, 'Disabled — Navidrome credentials missing.');
       } else {
-        showStatus(runStatus, 'Done. acquired: ' + (r.acquired || 0) + ', unavailable: ' + (r.unavailable || 0));
+        const done = await pollFollowRunDone(prevLastRun);
+        showStatus(runStatus, done ? 'Done — feed refreshed.' : 'Still running — check back shortly.');
         loadFeed();
       }
     } catch(e) {

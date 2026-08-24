@@ -1774,8 +1774,16 @@ def follow_remove(mbid):
 
 @app.route("/follow/run", methods=["POST"])
 def follow_run():
-    result = _run_follow_once()
-    return jsonify(result)
+    """Kick off a follow run in the background.
+
+    _run_follow_once can take minutes end to end (sync_playlist's playlist
+    scan waits alone), long enough to hit a browser/proxy request timeout if
+    run synchronously in the request handler. Mirrors POST /follow's existing
+    fire-and-forget dispatch for its immediate backfill kick; poll GET /follow
+    (state.last_run) or GET /follow/feed for completion.
+    """
+    threading.Thread(target=_run_follow_once, daemon=True).start()
+    return jsonify({"status": "started"})
 
 
 @app.route("/follow/feed", methods=["GET"])

@@ -1608,3 +1608,27 @@ def test_preview_route_uses_resolved_yt_dlp_binary(client):
     assert resp.status_code == 200
     assert srun.call_args.args[0][0] == srv._YT_DLP
     assert ".venv/bin/yt-dlp" not in srun.call_args.args[0][0]
+
+
+# ── /follow/run dispatches in the background ──────────────────────────────────
+
+def test_follow_run_dispatches_in_background_not_synchronously(client):
+    """POST /follow/run must not block on _run_follow_once — sync_playlist's
+    scan waits alone can take minutes, long enough to hit a browser/proxy
+    timeout. Same fire-and-forget pattern POST /follow already uses for its
+    immediate backfill kick."""
+    import sWebExt.py_server.server as srv
+    import time as _time
+
+    def slow_run_once():
+        _time.sleep(0.3)
+        return {"status": "ok", "acquired": 1, "unavailable": 0}
+
+    with patch.object(srv, "_run_follow_once", side_effect=slow_run_once):
+        t0 = _time.monotonic()
+        resp = client.post("/follow/run")
+        elapsed = _time.monotonic() - t0
+        _time.sleep(0.4)   # let the background thread finish before the patch exits
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "started"
+    assert elapsed < 0.2   # returned well before slow_run_once's 0.3s sleep completed
