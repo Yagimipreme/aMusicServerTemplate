@@ -1277,6 +1277,182 @@ async function renderLibrary() {
   shareCard.appendChild(recvWrap);
   el.appendChild(shareCard);
 
+  // ── 6. Import playlist ───────────────────────────────────────────────────────
+  const impCard = document.createElement('div');
+  impCard.className = 'tool';
+  impCard.style.cssText = 'flex-direction:column;align-items:stretch;padding:15px 14px 4px';
+  const impHead = document.createElement('div');
+  impHead.className = 't-name';
+  const impTitle = document.createElement('b');
+  impTitle.textContent = 'Import playlist';
+  const impDesc = document.createElement('span');
+  impDesc.textContent = 'Spotify link, Exportify CSV, or "Artist - Title" lines';
+  impHead.appendChild(impTitle);
+  impHead.appendChild(impDesc);
+  impCard.appendChild(impHead);
+
+  const impArea = document.createElement('textarea');
+  impArea.className = 'txt';
+  impArea.rows = 4;
+  impArea.placeholder = 'https://open.spotify.com/playlist/…  — or one "Artist - Title" per line';
+
+  const impFile = document.createElement('input');
+  impFile.type = 'file';
+  impFile.accept = '.csv,text/csv';
+  impFile.className = 'txt';
+
+  const loadBtn = document.createElement('button');
+  loadBtn.className = 'btn ghost';
+  loadBtn.textContent = 'load';
+  const impStatus = document.createElement('span');
+  impStatus.className = 'share-status';
+  const impPreview = document.createElement('div');
+  impPreview.className = 'imp-preview';
+  const impName = document.createElement('input');
+  impName.className = 'txt';
+  impName.type = 'text';
+  impName.placeholder = 'playlist name';
+  impName.style.display = 'none';
+  const impGo = document.createElement('button');
+  impGo.className = 'btn run';
+  impGo.textContent = 'import';
+  impGo.style.display = 'none';
+  const impBar = makeBar();
+
+  impCard.appendChild(impArea);
+  const impFileRow = document.createElement('div');
+  impFileRow.className = 'frow';
+  impFileRow.appendChild(impFile);
+  impCard.appendChild(impFileRow);
+  const impBtnRow = document.createElement('div');
+  impBtnRow.className = 'frow';
+  impBtnRow.appendChild(loadBtn);
+  impBtnRow.appendChild(impStatus);
+  impCard.appendChild(impBtnRow);
+  impCard.appendChild(impPreview);
+  const impGoRow = document.createElement('div');
+  impGoRow.className = 'frow';
+  impGoRow.appendChild(impName);
+  impGoRow.appendChild(impGo);
+  impCard.appendChild(impGoRow);
+  impCard.appendChild(impBar);
+  el.appendChild(impCard);
+
+  let impTracks = [];
+
+  function showImpTracks(tracks, name) {
+    impTracks = tracks;
+    renderTrackPreview(impPreview, impTracks);
+    impName.value = name || 'Import playlist';
+    impName.style.display = '';
+    impGo.style.display = '';
+    impStatus.textContent = impTracks.length + ' tracks';
+  }
+
+  function parseTextLines(text) {
+    return text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+      const i = line.indexOf(' - ');
+      if (i === -1) return {artist: '', title: line};
+      return {artist: line.slice(0, i).trim(), title: line.slice(i + 3).trim()};
+    }).filter(t => t.title);
+  }
+
+  // Minimal RFC4180-ish CSV splitter (Exportify quotes fields containing commas)
+  function csvSplit(line) {
+    const out = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQ) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') inQ = false;
+        else cur += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function parseExportifyCsv(text) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (!lines.length) return [];
+    const header = csvSplit(lines[0]).map(h => h.trim());
+    const ti = header.indexOf('Track Name');
+    const ai = header.indexOf('Artist Name(s)');
+    if (ti === -1) throw new Error('CSV has no "Track Name" column');
+    return lines.slice(1).map(l => {
+      const cols = csvSplit(l);
+      return {
+        artist: ai === -1 ? '' : (cols[ai] || '').trim(),
+        title: (cols[ti] || '').trim(),
+      };
+    }).filter(t => t.title);
+  }
+
+  impFile.onchange = () => {
+    const f = impFile.files && impFile.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const tracks = parseExportifyCsv(String(reader.result || ''));
+        if (!tracks.length) throw new Error('no tracks found in CSV');
+        showImpTracks(tracks, f.name.replace(/\.csv$/i, ''));
+      } catch(e) {
+        impStatus.textContent = 'Error: ' + (e.message || 'bad CSV');
+      }
+    };
+    reader.onerror = () => { impStatus.textContent = 'could not read file'; };
+    reader.readAsText(f);
+  };
+
+  loadBtn.onclick = async () => {
+    const raw = impArea.value.trim();
+    if (!raw) { impStatus.textContent = 'paste a link or some lines first'; return; }
+    loadBtn.disabled = true;
+    impStatus.textContent = 'loading…';
+    impPreview.textContent = '';
+    try {
+      if (/open\.spotify\.com|spotify:playlist:/i.test(raw)) {
+        const r = await API('/spotify/playlist', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url: raw, limit: 200}),
+        });
+        if (r.status === 'unavailable') throw new Error('Spotify unavailable: ' + (r.reason || 'unknown'));
+        if (r.status !== 'ok') throw new Error(r.error || 'spotify fetch failed');
+        const tracks = (r.tracks || []).map(t => ({artist: t.artist || '', title: t.title || ''}))
+                                       .filter(t => t.title);
+        if (!tracks.length) throw new Error('playlist returned no tracks');
+        showImpTracks(tracks, r.name || 'Spotify import');
+      } else {
+        const tracks = parseTextLines(raw);
+        if (!tracks.length) throw new Error('no "Artist - Title" lines found');
+        showImpTracks(tracks, 'Import playlist');
+      }
+    } catch(e) {
+      impStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      loadBtn.disabled = false;
+    }
+  };
+
+  impGo.onclick = async () => {
+    if (!impTracks.length) return;
+    impGo.disabled = true;
+    impBar.style.display = '';
+    try {
+      const name = (impName.value || '').trim() || 'Import playlist';
+      await runImportJob(impTracks, name, impBar._inner, impStatus);
+    } catch(e) {
+      impStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      impGo.disabled = false;
+    }
+  };
+
   let recvTracks = [];
   parseBtn.onclick = async () => {
     const text = recvArea.value.trim();
