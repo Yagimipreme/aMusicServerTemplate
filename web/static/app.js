@@ -825,9 +825,12 @@ async function runImportJob(tracks, playlistName, fillEl, statusEl) {
         const total = s.total || 0;
         const done = s.done || 0;
         const errs = s.errors || 0;
-        fillEl.style.width = total ? Math.round((done / total) * 100) + '%' : '0%';
+        fillEl.style.width = total ? Math.round(((done + errs) / total) * 100) + '%' : '0%';
         statusEl.textContent = done + '/' + total + ' done' + (errs ? (' · ' + errs + ' failed') : '');
-        if (total && done >= total) {
+        // The server only increments `done` on success and `errors` on failure
+        // (server.py's import job) — with any failed track, `done` alone never
+        // reaches `total`, so completion must count both.
+        if (total && (done + errs) >= total) {
           clearInterval(timer);
           resolve({total, done, errors: errs});
         }
