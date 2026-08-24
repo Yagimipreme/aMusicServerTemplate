@@ -73,7 +73,13 @@ def build_deps(tmp_path, lastfm_ready=True, library_songs=None, extra_similar=No
         song_exists=lambda artist, title: False,
         start_scan=lambda: True,
         get_songs_by_genre=lambda genre, count=200: library_songs,
-        search_songs=lambda query, count=20: library_songs,
+        search_songs=lambda query, count=5: library_songs,
+        find_playlist_id=lambda name: None,
+        get_playlist_song_ids=lambda pid: [],
+        create_playlist=lambda name, ids: "pl-fake",
+        replace_playlist=lambda pid, ids: True,
+        delete_playlist=lambda pid: True,
+        get_scan_status=lambda: {"scanning": False, "count": 0},
     )
 
     def search_fn(name, n, track_hint=None):
@@ -224,8 +230,10 @@ def test_run_profile_writes_m3u_with_profile_name(tmp_path, monkeypatch):
     profile = make_profile(name="My Techno Mix", count=2, cap=10, new_ratio=1.0)
     cfg = make_cfg()
     result = run_profile(deps, cfg, profile)
-    assert result["m3u"] is not None
-    assert "My_Techno_Mix" in result["m3u"] or "My Techno Mix" in result["m3u"]
+    # build_deps' fake subsonic exposes replace_playlist, so run_profile takes the
+    # merge-aware API path (discover/playlist_sync.py) instead of the m3u writer.
+    assert result["m3u"] is None
+    assert result["playlist"]["status"] == "ok"
 
 
 # ── state.save(stamp_last_run=False) ─────────────────────────────────────────
@@ -366,3 +374,53 @@ def test_genre_mode_does_not_call_similar_or_listener_floor(tmp_path, monkeypatc
     run_profile(deps, make_cfg(), profile)
     assert "artist.getSimilar" not in calls
     assert "artist.getInfo" not in calls
+
+
+# ── sync_playlist wiring (merge-aware API playlists) ─────────────────────────
+
+def test_run_profile_uses_sync_playlist_when_api_available(tmp_path, monkeypatch):
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    deps, downloaded = build_deps(tmp_path)
+    seen = {}
+
+    def fake_sync(subsonic, name, new_paths, ledger, cap, **kw):
+        seen.update({"name": name, "paths": list(new_paths), "cap": cap})
+        ledger["owned"] = list(new_paths)
+        return {"status": "ok", "playlist_id": "p1", "added": len(new_paths),
+                "evicted": 0, "pending": 0, "migrated": True,
+                "final_count": len(new_paths)}
+
+    monkeypatch.setattr("discover.playlist_sync.sync_playlist", fake_sync)
+    result = run_profile(deps, make_cfg(), make_profile(count=2, cap=7))
+    assert seen["name"] == "Test Mix"
+    assert seen["cap"] == 7
+    assert result["playlist"]["status"] == "ok"
+    assert result["m3u"] is None
+
+
+def test_run_profile_falls_back_to_m3u_without_api_client(tmp_path, monkeypatch):
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    deps, downloaded = build_deps(tmp_path)
+    # Simulate a client built before the API methods existed / no creds path.
+    for attr in ("replace_playlist", "create_playlist", "find_playlist_id"):
+        if hasattr(deps.subsonic, attr):
+            delattr(deps.subsonic, attr)
+    result = run_profile(deps, make_cfg(), make_profile(count=2))
+    assert result["m3u"] and result["m3u"].endswith(".m3u")
+    assert result.get("playlist") is None
+
+
+def test_run_profile_persists_the_playlist_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr("discover.engine.lastfm_is_ready", lambda *a, **kw: True)
+    deps, downloaded = build_deps(tmp_path)
+
+    def fake_sync(subsonic, name, new_paths, ledger, cap, **kw):
+        ledger["playlist_id"] = "p1"
+        ledger["owned"] = ["s1"]
+        ledger["migrated"] = True
+        return {"status": "ok", "playlist_id": "p1", "added": 1, "evicted": 0,
+                "pending": 0, "migrated": True, "final_count": 1}
+
+    monkeypatch.setattr("discover.playlist_sync.sync_playlist", fake_sync)
+    run_profile(deps, make_cfg(), make_profile(count=2))
+    assert deps.state.playlist_ledger("Test Mix")["owned"] == ["s1"]
