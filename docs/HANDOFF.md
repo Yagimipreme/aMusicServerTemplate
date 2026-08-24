@@ -71,12 +71,15 @@ Seven lower-priority cleanup items (schema duplication, unbounded pending queue,
 `_existing_playlist_basenames` helper, duplicated m3u sanitizer) were cut by the
 review's findings cap — candidates for a later `/simplify` pass, not merge blockers.
 
-**Merge/deploy (user decision, not taken yet):** merge branch → `bare_bones`, restart
-`amusicserver`. First scheduled run of each mix after deploy performs the m3u→API
-migration (renames the mix `.m3u`s to `.m3u.bak`). User should then delete stale
-phone-local Symfonium playlist copies and edit server playlists directly.
-Note: the worktree contains an (gitignored, uncommitted) copy of `config.json` with
-live credentials — do not commit it; remove worktree after merge.
+**MERGED & DEPLOYED 2026-08-24 evening** (merge `e0d5128`, 672 tests green, worktree
+deleted). Deploy surprise: an orphaned server from Aug 16 (parent PID 1, old code,
+`venv/`) was the actual :5000 listener; killed it so the systemd instance (`.venv`)
+could bind — if "restarts don't take effect" ever recurs, check for orphan listeners
+first. Live migration verified on Daily Mix: 49 tracks seeded from m3u (backup
+`Daily Mix.m3u.bak`), first merge sync +6/−5/0 pending, playlist confirmed non-empty
+in Navidrome. Remaining mixes migrate on their next scheduled runs. User still to do:
+edit a synced playlist in Symfonium, confirm the edit survives the next run, then
+delete phone-local playlist copies.
 
 ## 2. SC personal mixes — Phase 1 complete
 
