@@ -116,3 +116,39 @@ with no route auth — the password stays optional, the token is the working sec
 Setup-wizard interaction: none. Per the 2026-08-24 wizard design's minimal-core scope,
 SC personal mixes are not a wizard step; the wizard's Done step points at installing
 the extension, and the extension's Connect button is the SC onboarding.
+
+### Phase 1 spike results (2026-08-24, manual-token run — spike COMPLETE)
+
+Run with a manually provisioned token (layer 3) against the real account; full dump in
+`logs/sc_mix_discovery.json`. The open questions above are answered:
+
+**The mixes.** `GET /mixed-selections` returns selection groups; the personal ones:
+
+| Selection id | Contents | Cadence signal |
+|---|---|---|
+| `soundcloud:selections:made-for-you` | **Weekly Wave** (`…system-playlists:weekly:<user_id>`), **Daily Drops** (`…new-for-you:<user_id>`) | weekly / daily |
+| `soundcloud:selections:your-moods` | **Your Mix 1–6** (`…your-moods:<user_id>:1..6`) | unlabeled — treat as daily |
+
+Other selections (curated-global, trending-by-genre, artist-stations, liked-by,
+buzzing…) are not account-personal mixes and are out of scope for Phase 2.
+
+**The fetch contract** (three calls, all `api-v2` with `Authorization: OAuth` +
+`client_id`):
+
+1. `GET /mixed-selections` → filter to the two selection ids above; each item carries
+   a stable `urn`.
+2. `GET /system-playlists/<urlencoded urn>` → `{title, last_updated, tracks: [...]}` —
+   Weekly Wave had 30 tracks, `last_updated` matched the weekly refresh. **Tracks come
+   back as id-only stubs.**
+3. `GET /tracks?ids=<comma-separated>` → hydrated track objects (title,
+   `permalink_url`, `media.transcodings`) — batch ~20 ids per call. Verified working.
+
+Hydrated tracks flow through the existing `_track_from_raw` → `permalink_url` →
+existing downloader, exactly as this spec's Phase 2 assumed.
+
+**Phase 2 amendment:** playlist writing uses the merge-aware
+`discover/playlist_sync.py` mechanism (2026-08-24 usable-status batch) instead of the
+originally planned `write_mix_snapshot` m3u full-replace: each SC mix syncs as an
+engine-owned track set (full engine-side replace per SC refresh), so user additions
+and deletions in the Navidrome playlist survive, consistent with every other generated
+playlist. `write_mix_snapshot` will not be built.
