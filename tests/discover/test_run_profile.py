@@ -5,6 +5,17 @@ from discover.engine import run_profile
 from discover.state import DiscoverState
 
 
+@pytest.fixture(autouse=True)
+def _fast_scan_wait(monkeypatch):
+    """run_profile's call into sync_playlist has no wait_fn override point, so
+    without this every test here that reaches the playlist-sync path would
+    hit the real wait_for_scan — including its grace-period wait for a
+    scanning:true observation — adding several real seconds of sleep per
+    test. wait_for_scan's own race-condition behavior is covered directly by
+    tests/discover/test_playlist_sync.py."""
+    monkeypatch.setattr("discover.playlist_sync.wait_for_scan", lambda *a, **kw: True)
+
+
 def make_profile(
     id="testmix", name="Test Mix", count=10, cap=50, new_ratio=1.0,
     cadence="weekly", run_day="sunday", run_hour=22,

@@ -114,6 +114,45 @@ def test_wait_for_scan_gives_up_at_timeout():
                          clock=lambda: next(ticks)) is False
 
 
+def test_wait_for_scan_does_not_accept_immediate_idle_without_a_grace_period():
+    """A scan that never reports scanning:true (too fast to observe, or the
+    async scanner hasn't flipped the flag yet by the time of the first poll)
+    must not be accepted as 'done' on the very first status check — that read
+    could just as easily mean 'hasn't started yet', in which case downloads
+    from this run would resolve to nothing since nothing was actually
+    (re)indexed. Give the scanner a bounded grace window to prove it started."""
+    calls = {"status": 0}
+
+    def status():
+        calls["status"] += 1
+        return {"scanning": False, "count": 0}
+
+    sub = SimpleNamespace(start_scan=lambda: True, get_scan_status=status)
+    ticks = iter([0, 1, 2, 3, 4, 5, 6])
+    result = wait_for_scan(sub, timeout=60, poll=1, sleep_fn=lambda s: None,
+                           clock=lambda: next(ticks), start_grace=5)
+    assert result is True
+    assert calls["status"] > 1   # not accepted on the very first poll
+
+
+def test_wait_for_scan_accepts_idle_immediately_once_grace_elapses(monkeypatch):
+    """After the grace window passes with scanning never observed true, the
+    scan is assumed to have already finished (or had nothing to do) and idle
+    is accepted — this must not spin for the full timeout in that case."""
+    calls = {"status": 0}
+
+    def status():
+        calls["status"] += 1
+        return {"scanning": False, "count": 0}
+
+    sub = SimpleNamespace(start_scan=lambda: True, get_scan_status=status)
+    ticks = iter([0, 6, 12])   # first poll already past a 5s grace window
+    result = wait_for_scan(sub, timeout=60, poll=1, sleep_fn=lambda s: None,
+                           clock=lambda: next(ticks), start_grace=5)
+    assert result is True
+    assert calls["status"] == 1
+
+
 def test_wait_for_scan_tolerates_client_without_scan_status():
     sub = SimpleNamespace(start_scan=lambda: True)
     slept = []
@@ -173,6 +212,19 @@ def test_resolve_paths_survives_search_exception():
 
 from discover.playlist_sync import migrate_from_m3u
 
+def _instant_wait(subsonic):
+    """Fast stand-in for wait_for_scan in tests that don't care about its
+    specific timing (the race-condition fix is covered directly by the
+    wait_for_scan tests above) — still triggers start_scan() so
+    scan-triggering assertions keep working, but returns immediately instead
+    of sleeping through the real grace period wait_for_scan now has."""
+    try:
+        subsonic.start_scan()
+    except Exception:
+        pass
+    return True
+
+
 
 def _fake_sub(existing_id=None, songs=None, created="NEW"):
     state = {"deleted": [], "created": None}
@@ -197,7 +249,7 @@ def test_migrate_renames_m3u_to_bak_and_never_deletes_it(tmp_path):
     m3u.write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
     sub, state = _fake_sub(existing_id="7",
                            songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
-    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["migrated"] is True
     assert not m3u.exists()
     assert (tmp_path / "Weekly Mix.m3u.bak").read_text(encoding="utf-8").startswith("#EXTM3U")
@@ -208,7 +260,7 @@ def test_migrate_deletes_the_old_api_playlist_first(tmp_path):
     (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
     sub, state = _fake_sub(existing_id="7",
                            songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
-    migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert state["deleted"] == ["7"]
 
 
@@ -221,7 +273,7 @@ def test_migrate_seeds_new_playlist_and_marks_tracks_owned(tmp_path):
 
     sub, state = _fake_sub(existing_id=None)
     sub.search_songs = search_songs
-    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert state["created"][0] == "Weekly Mix"
     assert state["created"][1] == ["id-a", "id-b"]
     assert r["owned"] == ["id-a", "id-b"]
@@ -230,7 +282,7 @@ def test_migrate_seeds_new_playlist_and_marks_tracks_owned(tmp_path):
 
 def test_migrate_is_a_noop_without_an_m3u(tmp_path):
     sub, state = _fake_sub()
-    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["migrated"] is False
     assert state["deleted"] == [] and state["created"] is None
 
@@ -238,7 +290,7 @@ def test_migrate_is_a_noop_without_an_m3u(tmp_path):
 def test_migrate_sanitizes_the_playlist_name_for_the_filename(tmp_path):
     (tmp_path / "Odd_Name.m3u").write_text("#EXTM3U\na.mp3\n", encoding="utf-8")
     sub, state = _fake_sub(songs=[{"id": "s1", "title": "", "artist": "", "path": "x/a.mp3"}])
-    r = migrate_from_m3u(sub, "Odd/Name", str(tmp_path), tag_reader=lambda p: ("", ""))
+    r = migrate_from_m3u(sub, "Odd/Name", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["migrated"] is True
     assert (tmp_path / "Odd_Name.m3u.bak").exists()
 
@@ -256,7 +308,7 @@ def test_migrate_aborts_without_touching_old_playlist_or_m3u_if_create_fails(tmp
         raise RuntimeError("nd down")
     sub.create_playlist = boom
 
-    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["migrated"] is False
     assert m3u.exists()             # never renamed
     assert not (tmp_path / "Weekly Mix.m3u.bak").exists()
@@ -276,7 +328,7 @@ def test_migrate_looks_up_old_playlist_before_creating_the_new_one(tmp_path):
     sub.find_playlist_id = lambda name: (calls.append("find"), orig_find(name))[1]
     sub.create_playlist = lambda name, ids: (calls.append("create"), orig_create(name, ids))[1]
 
-    migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert calls.index("find") < calls.index("create")
     assert state["deleted"] == ["7"]   # the OLD id, not the new one
 
@@ -291,7 +343,7 @@ def test_migrate_queues_unresolved_tracks_as_pending(tmp_path):
 
     sub, state = _fake_sub(existing_id=None)
     sub.search_songs = search_songs
-    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""))
+    r = migrate_from_m3u(sub, "Weekly Mix", str(tmp_path), tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["migrated"] is True
     assert r["owned"] == ["id-a"]
     assert r["pending"] == [str(tmp_path / "missing.mp3")]
@@ -360,7 +412,7 @@ def test_sync_creates_the_playlist_when_missing(tmp_path):
     sub = FakeSubsonic(songs={"A T": [{"id": "s1", "title": "T", "artist": "A"}]})
     led = _ledger()
     r = sync_playlist(sub, "Weekly Mix", ["/m/1.mp3"], led, cap=10,
-                      tag_reader=lambda p: ("A", "T"))
+                      tag_reader=lambda p: ("A", "T"), wait_fn=_instant_wait)
     assert r["status"] == "ok"
     assert led["playlist_id"] == "pl-Weekly-Mix"
     assert led["owned"] == ["s1"]
@@ -372,7 +424,7 @@ def test_sync_preserves_user_tracks_and_appends_new_ones(tmp_path):
                        songs={"A T2": [{"id": "e2", "title": "T2", "artist": "A"}]})
     led = _ledger(playlist_id="p1", owned=["e1"])
     sync_playlist(sub, "Weekly Mix", ["/m/2.mp3"], led, cap=10,
-                  tag_reader=lambda p: ("A", "T2"))
+                  tag_reader=lambda p: ("A", "T2"), wait_fn=_instant_wait)
     assert sub.replaced[-1] == ("p1", ["u1", "e1", "e2"])
     assert led["owned"] == ["e1", "e2"]
 
@@ -380,7 +432,7 @@ def test_sync_preserves_user_tracks_and_appends_new_ones(tmp_path):
 def test_sync_respects_a_user_deletion(tmp_path):
     sub = FakeSubsonic(playlists={"Weekly Mix": {"id": "p1", "ids": ["e2"]}}, songs={})
     led = _ledger(playlist_id="p1", owned=["e1", "e2"])
-    sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("", ""))
+    sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert sub.replaced[-1] == ("p1", ["e2"])
     assert led["owned"] == ["e2"]
 
@@ -390,7 +442,7 @@ def test_sync_evicts_oldest_engine_track_past_cap(tmp_path):
                        songs={"A T3": [{"id": "e3", "title": "T3", "artist": "A"}]})
     led = _ledger(playlist_id="p1", owned=["e1", "e2"])
     r = sync_playlist(sub, "Weekly Mix", ["/m/3.mp3"], led, cap=2,
-                      tag_reader=lambda p: ("A", "T3"))
+                      tag_reader=lambda p: ("A", "T3"), wait_fn=_instant_wait)
     assert r["evicted"] == 1
     assert sub.replaced[-1] == ("p1", ["u1", "e2", "e3"])
     assert led["owned"] == ["e2", "e3"]
@@ -400,7 +452,7 @@ def test_sync_queues_unresolved_paths_as_pending(tmp_path):
     sub = FakeSubsonic(playlists={"Weekly Mix": {"id": "p1", "ids": []}}, songs={})
     led = _ledger(playlist_id="p1")
     r = sync_playlist(sub, "Weekly Mix", ["/m/miss.mp3"], led, cap=10,
-                      tag_reader=lambda p: ("A", "Missing"))
+                      tag_reader=lambda p: ("A", "Missing"), wait_fn=_instant_wait)
     assert led["pending"] == ["/m/miss.mp3"]
     assert r["pending"] == 1
 
@@ -409,7 +461,7 @@ def test_sync_retries_pending_paths_on_the_next_run(tmp_path):
     sub = FakeSubsonic(playlists={"Weekly Mix": {"id": "p1", "ids": []}},
                        songs={"A Missing": [{"id": "late", "title": "Missing", "artist": "A"}]})
     led = _ledger(playlist_id="p1", pending=["/m/miss.mp3"])
-    sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("A", "Missing"))
+    sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("A", "Missing"), wait_fn=_instant_wait)
     assert led["pending"] == []
     assert led["owned"] == ["late"]
 
@@ -421,7 +473,7 @@ def test_sync_runs_migration_once_then_never_again(tmp_path):
                                        "path": "lib/old.mp3"}]})
     led = _ledger(migrated=False)
     sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
-                  tag_reader=lambda p: ("", ""))
+                  tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert led["migrated"] is True
     assert led["owned"] == ["s-old"]
     assert not (tmp_path / "Weekly Mix.m3u").exists()
@@ -429,7 +481,7 @@ def test_sync_runs_migration_once_then_never_again(tmp_path):
     # Second run must not touch the .bak or re-migrate
     (tmp_path / "Weekly Mix.m3u").write_text("#EXTM3U\nnew.mp3\n", encoding="utf-8")
     sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
-                  tag_reader=lambda p: ("", ""))
+                  tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert (tmp_path / "Weekly Mix.m3u").exists()   # untouched on the second run
 
 
@@ -445,7 +497,7 @@ def test_sync_does_not_mark_migrated_when_migration_fails(tmp_path):
 
     led = _ledger(migrated=False)
     r = sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
-                      tag_reader=lambda p: ("", ""))
+                      tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert led["migrated"] is False              # retried next run, not skipped forever
     assert (tmp_path / "Weekly Mix.m3u").exists()  # old m3u untouched
     assert "Weekly Mix" in sub.playlists           # old playlist untouched
@@ -456,7 +508,7 @@ def test_sync_moves_unresolved_migration_tracks_to_pending(tmp_path):
     sub = FakeSubsonic(songs={})   # nothing resolves
     led = _ledger(migrated=False)
     sync_playlist(sub, "Weekly Mix", [], led, cap=10, song_dir=str(tmp_path),
-                  tag_reader=lambda p: ("", ""))
+                  tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert led["migrated"] is True
     assert str(tmp_path / "missing.mp3") in led["pending"]
 
@@ -466,7 +518,7 @@ def test_sync_waits_for_the_scan_before_resolving(tmp_path):
                        songs={"A T": [{"id": "s1", "title": "T", "artist": "A"}]})
     led = _ledger(playlist_id="p1")
     sync_playlist(sub, "Weekly Mix", ["/m/1.mp3"], led, cap=10,
-                  tag_reader=lambda p: ("A", "T"))
+                  tag_reader=lambda p: ("A", "T"), wait_fn=_instant_wait)
     assert sub.scans >= 1
 
 
@@ -474,5 +526,5 @@ def test_sync_reports_error_without_crashing_the_run(tmp_path):
     sub = FakeSubsonic()
     sub.create_playlist = lambda name, ids: (_ for _ in ()).throw(RuntimeError("nd down"))
     led = _ledger()
-    r = sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("", ""))
+    r = sync_playlist(sub, "Weekly Mix", [], led, cap=10, tag_reader=lambda p: ("", ""), wait_fn=_instant_wait)
     assert r["status"] == "error"

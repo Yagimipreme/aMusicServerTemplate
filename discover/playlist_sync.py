@@ -14,6 +14,7 @@ import time
 logger = logging.getLogger(__name__)
 
 _SCAN_FALLBACK_SLEEP = 15.0
+_SCAN_START_GRACE = 5.0   # seconds to wait for scanning:true after start_scan()
 
 
 def merge_playlist(current_ids, owned_ids, new_ids, cap):
@@ -72,14 +73,24 @@ def _read_tags(path):
 
 
 def wait_for_scan(subsonic, timeout=120, poll=3.0, sleep_fn=None,
-                  clock=None) -> bool:
+                  clock=None, start_grace=None) -> bool:
     """Trigger a library scan and wait (bounded) for it to settle.
 
-    Returns True when the scan reported idle inside the timeout. A client with
-    no get_scan_status falls back to one fixed sleep and returns False.
+    Returns True when the scan reported idle inside the timeout. Guards
+    against the async-scanner race where the very first status poll, taken
+    immediately after start_scan(), can still read scanning:false because the
+    scanner hasn't flipped the flag yet — accepting that at face value would
+    make wait_for_scan return True before anything was actually (re)indexed,
+    so downloads from this run would then fail to resolve to a song id. We
+    require observing scanning:true at least once before accepting idle,
+    unless a bounded grace period elapses without ever seeing it (the scan
+    was either already finished or had nothing to do).
+
+    A client with no get_scan_status falls back to one fixed sleep and returns False.
     """
     sleep_fn = sleep_fn or time.sleep
     clock = clock or time.monotonic
+    start_grace = _SCAN_START_GRACE if start_grace is None else start_grace
     try:
         subsonic.start_scan()
     except Exception:
@@ -90,7 +101,10 @@ def wait_for_scan(subsonic, timeout=120, poll=3.0, sleep_fn=None,
         sleep_fn(_SCAN_FALLBACK_SLEEP)
         return False
 
-    deadline = clock() + timeout
+    start = clock()
+    grace_deadline = start + start_grace
+    deadline = start + timeout
+    observed_scanning = False
     while clock() < deadline:
         try:
             st = status_fn() or {}
@@ -98,7 +112,12 @@ def wait_for_scan(subsonic, timeout=120, poll=3.0, sleep_fn=None,
             logger.exception("playlist_sync: get_scan_status failed")
             sleep_fn(_SCAN_FALLBACK_SLEEP)
             return False
-        if not st.get("scanning"):
+        if st.get("scanning"):
+            observed_scanning = True
+        elif observed_scanning or clock() >= grace_deadline:
+            # Idle, and either we've already seen it running (a genuine
+            # settle) or we gave it a full grace window to start and it never
+            # did — either way it's safe to accept idle now.
             return True
         sleep_fn(poll)
     logger.warning("playlist_sync: scan did not settle within %ss", timeout)
