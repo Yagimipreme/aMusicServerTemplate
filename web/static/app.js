@@ -31,6 +31,56 @@ function fetchGenreVocab() {
 const screens = {};  // name -> {el, render}
 let _currentScreen = null;
 
+// ── Shared audio preview (one element for the whole app) ─────────────────────
+const Player = (() => {
+  let audio = null, curKey = null, onStop = null;
+
+  function els() {
+    return {
+      bar:    document.getElementById('miniplayer'),
+      toggle: document.getElementById('mp-toggle'),
+      title:  document.getElementById('mp-title'),
+      close:  document.getElementById('mp-close'),
+    };
+  }
+
+  function ensure() {
+    if (audio) return audio;
+    audio = new Audio();
+    audio.preload = 'none';
+    const e = els();
+    audio.onplay  = () => { e.toggle.textContent = '❚❚'; };
+    audio.onpause = () => { e.toggle.textContent = '▶'; };
+    audio.onended = () => stop();
+    e.toggle.onclick = () => { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); };
+    e.close.onclick = () => stop();
+    return audio;
+  }
+
+  function stop() {
+    if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
+    const e = els();
+    if (e.bar) e.bar.style.display = 'none';
+    if (e.title) e.title.textContent = '';
+    curKey = null;
+    if (onStop) { const f = onStop; onStop = null; f(); }
+  }
+
+  function play(key, url, label, stopCallback) {
+    const a = ensure();
+    if (onStop) { const f = onStop; onStop = null; f(); }
+    onStop = stopCallback || null;
+    curKey = key;
+    const e = els();
+    e.title.textContent = label || '';
+    e.bar.style.display = '';
+    a.src = url;
+    a.play().catch(() => {});
+  }
+
+  return {play, stop, current: () => curKey};
+})();
+
 function show(name) {
   if (name === _currentScreen) return;
   _currentScreen = name;
@@ -1177,6 +1227,39 @@ async function renderSearch() {
     meta.appendChild(sub);
     row.appendChild(meta);
 
+    const playBtn = document.createElement('button');
+    playBtn.className = 'play';
+    playBtn.textContent = '▶';
+    const playKey = (item.source || '') + '|' + (item.url || '') + '|' + (item.title || '');
+    function resetPlay() { playBtn.textContent = '▶'; playBtn.classList.remove('on'); }
+    playBtn.onclick = async () => {
+      if (Player.current() === playKey) { Player.stop(); return; }
+      playBtn.disabled = true;
+      playBtn.textContent = '…';
+      try {
+        let data;
+        if (item.source === 'sc') {
+          if (!item.progressive_url) throw new Error('no progressive stream');
+          data = await API('/sc/preview?progressive_url=' + encodeURIComponent(item.progressive_url));
+        } else {
+          data = await API('/preview?source=yt&url=' + encodeURIComponent(item.url || '') +
+                           '&artist=' + encodeURIComponent(item.artist || '') +
+                           '&title=' + encodeURIComponent(item.title || ''));
+        }
+        if (data.status !== 'ok' || !data.stream_url) throw new Error(data.reason || 'unavailable');
+        playBtn.textContent = '❚❚';
+        playBtn.classList.add('on');
+        Player.play(playKey, data.stream_url,
+                    [item.artist, item.title].filter(Boolean).join(' — '), resetPlay);
+      } catch(e) {
+        playBtn.textContent = '!';
+        setTimeout(resetPlay, 2000);
+      } finally {
+        playBtn.disabled = false;
+      }
+    };
+    row.appendChild(playBtn);
+
     const getBtn = document.createElement('button');
     getBtn.className = 'get';
     getBtn.textContent = '+';
@@ -1225,6 +1308,7 @@ async function renderSearch() {
       duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
       url: t.permalink_url || '',
       artwork_url: t.artwork_url || null,
+      progressive_url: t.progressive_url || '',
     };
   }
 
@@ -1485,6 +1569,7 @@ async function renderSearch() {
           duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
           url: t.permalink_url || '',
           artwork_url: t.artwork_url || null,
+          progressive_url: t.progressive_url || '',
         };
         if (item.url) allResults.push(buildResultRow(item));
       });
