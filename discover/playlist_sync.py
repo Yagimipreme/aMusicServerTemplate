@@ -208,3 +208,63 @@ def migrate_from_m3u(subsonic, name, song_dir, tag_reader=None, wait_fn=None):
     logger.info("playlist_sync: migrated %r from m3u — %d tracks seeded, backup at %s",
                 name, len(ids), backup)
     return result
+
+
+def _blank_ledger() -> dict:
+    return {"playlist_id": "", "owned": [], "pending": [], "migrated": False}
+
+
+def sync_playlist(subsonic, name, new_paths, ledger, cap,
+                  song_dir=None, tag_reader=None, wait_fn=None):
+    """Merge this run's new tracks into the named Navidrome playlist.
+
+    Never touches user-added tracks, never re-adds tracks the user deleted, and
+    caps only the engine-owned share. Mutates `ledger` in place; the caller
+    persists it.
+    """
+    wait_fn = wait_fn or wait_for_scan
+    for k, v in _blank_ledger().items():
+        ledger.setdefault(k, v)
+
+    try:
+        # 1. one-time migration off the m3u writer
+        if not ledger.get("migrated") and song_dir:
+            mig = migrate_from_m3u(subsonic, name, song_dir,
+                                   tag_reader=tag_reader, wait_fn=wait_fn)
+            if mig["migrated"]:
+                ledger["playlist_id"] = mig["playlist_id"]
+                ledger["owned"] = list(mig["owned"])
+            ledger["migrated"] = True   # attempted once, never retried
+
+        # 2. make sure this run's downloads are indexed
+        wait_fn(subsonic)
+
+        # 3. resolve pending retries first, then this run's new files
+        candidates = list(ledger.get("pending") or []) + list(new_paths or [])
+        new_ids, unresolved = resolve_paths(subsonic, candidates, tag_reader=tag_reader)
+        ledger["pending"] = unresolved
+
+        # 4. locate (or create) the playlist
+        pid = ledger.get("playlist_id") or subsonic.find_playlist_id(name)
+        if not pid:
+            pid = subsonic.create_playlist(name, [])
+        ledger["playlist_id"] = pid
+        current_ids = subsonic.get_playlist_song_ids(pid) if pid else []
+
+        # 5. merge and write back
+        merged = merge_playlist(current_ids, ledger.get("owned") or [], new_ids, cap)
+        subsonic.replace_playlist(pid, merged["final"])
+        ledger["owned"] = merged["owned"]
+
+        logger.info("playlist_sync: %r — %d user, %d engine (+%d new, -%d evicted, %d pending)",
+                    name, len(merged["user"]), len(merged["owned"]),
+                    len(new_ids), len(merged["evicted"]), len(unresolved))
+        return {"status": "ok", "playlist_id": pid,
+                "added": len(new_ids), "evicted": len(merged["evicted"]),
+                "pending": len(unresolved), "migrated": ledger["migrated"],
+                "final_count": len(merged["final"])}
+    except Exception as e:
+        logger.exception("playlist_sync: sync failed for %r", name)
+        return {"status": "error", "error": str(e), "playlist_id": ledger.get("playlist_id", ""),
+                "added": 0, "evicted": 0, "pending": len(ledger.get("pending") or []),
+                "migrated": ledger.get("migrated", False), "final_count": 0}
