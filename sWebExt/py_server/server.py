@@ -2459,11 +2459,12 @@ def share_parse():
 
 @app.route("/share/import", methods=["GET"])
 def share_import():
-    """Receive shared link — redirect to explore page with payload in fragment."""
+    """Receive a shared link — hand the payload to the Library screen's Share card."""
+    import urllib.parse as _up
     d = request.args.get("d", "")
     if d:
-        return redirect(f"/explore#import:{d}")
-    return redirect("/explore")
+        return redirect(f"/?share={_up.quote(d, safe='')}#library")
+    return redirect("/#library")
 
 
 # ── Startup + zeroconf ────────────────────────────────────────────────────────

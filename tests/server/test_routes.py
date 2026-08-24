@@ -1538,6 +1538,33 @@ def test_sc_preview_accepts_legacy_stream_url_param(client):
     assert json.loads(resp.data)["stream_url"] == "https://cf-media.sndcdn.com/y.mp3"
 
 
+
+# ── /share/import redirect ────────────────────────────────────────────────────
+
+def test_share_import_redirects_to_library_with_payload(client):
+    resp = client.get("/share/import?v=1&d=eyJhIjoxfQ")
+    assert resp.status_code in (301, 302)
+    assert resp.headers["Location"] == "/?share=eyJhIjoxfQ#library"
+
+
+def test_share_import_without_payload_redirects_to_library(client):
+    resp = client.get("/share/import")
+    assert resp.status_code in (301, 302)
+    assert resp.headers["Location"] == "/#library"
+
+
+def test_share_import_never_redirects_to_explore(client):
+    resp = client.get("/share/import?v=1&d=abc")
+    assert "/explore" not in resp.headers["Location"]
+
+
+def test_share_import_quotes_payload(client):
+    resp = client.get("/share/import?v=1&d=aGVsbG8%3D")
+    assert "explore" not in resp.headers["Location"]
+    assert resp.headers["Location"].startswith("/?share=")
+    assert "#library" in resp.headers["Location"]
+
+
 def test_preview_route_uses_resolved_yt_dlp_binary(client):
     """/preview must invoke _YT_DLP, never a hardcoded .venv path."""
     import sWebExt.py_server.server as srv
