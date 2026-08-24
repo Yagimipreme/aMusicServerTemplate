@@ -68,3 +68,51 @@ New function `write_mix_snapshot(song_dir, mp3_paths, name)` in `discover/assemb
 - Exact number and identity of SC's personal mixes (this design assumes "at least a weekly mix," but the real count/cadence is unknown until the spike runs).
 - Exact endpoint path(s) and JSON shape for those mixes.
 - Whether SC's login flow can be automated headlessly without hitting CAPTCHA/2FA in practice — if it can't, Phase 1's auth approach needs revisiting before Phase 2 proceeds.
+
+---
+
+## Amendment 2026-08-24 — three-layer token provisioning (approved)
+
+The last open question above is now answered: **headless login hits a CAPTCHA.** On
+2026-08-24 (after fixing the AppArmor profile that had blocked headless Chrome
+entirely), the Phase 1 spike ran against the real account and SoundCloud served a
+captcha challenge on the sign-in page; the endpoint dump came back empty. Automated
+CAPTCHA solving is out of scope by principle, so the original "refresh token via
+headless re-login on 401" mechanism is demoted from primary to opportunistic fallback.
+
+The token is therefore treated as a **provisioned secret**: long-lived (weeks–months,
+dies on logout-everywhere / password change / SC-side expiry → 401), provisioned and
+re-provisioned through three layers, tried in this order:
+
+1. **Extension token bridge (primary).** The browser extension runs where the user is
+   already logged into SoundCloud. Additions to `sWebExt/`: `cookies` permission +
+   `*.soundcloud.com` host permission in the manifest; a **"Connect SoundCloud
+   account"** button in the popup that reads the `oauth_token` cookie and POSTs it to
+   the server; and a background service-worker `chrome.cookies.onChanged` listener that
+   re-pushes the cookie whenever SC rotates it — the server copy stays fresh
+   indefinitely for anyone who keeps using soundcloud.com in that browser. No CAPTCHA,
+   no devtools, one click.
+2. **Headless login with stored credentials (opportunistic fallback).** The merged
+   Phase 1 code (`soundcloud/auth.py` + `sc_username`/`sc_password`), attempted on 401.
+   CAPTCHA challenges are risk-based, so this sometimes silently self-heals the token;
+   a challenge simply means the attempt fails quietly, matching the existing
+   error-handling rule (warn + skip that run, never crash the scheduler).
+3. **Manual paste (universal fallback).** A token field in the "SoundCloud Mixes"
+   settings group with a short walkthrough (any api-v2 request's `Authorization`
+   header, or the `oauth_token` cookie). Needed anyway for extension-less setups.
+
+New server route: `POST /sc/oauth_token {token}` — validates the token with one
+authenticated api-v2 call (e.g. `/me`), persists `sc_oauth_token` +
+`sc_oauth_token_ts` on success, returns the resolved account username so the extension
+popup and settings UI can show "Connected as <user>". Used by layers 1 and 3.
+
+Status surface: when all layers are exhausted (401 and no fresh token), the SoundCloud
+Mixes settings group and the personal-mix sync status show
+"token expired — click Connect SoundCloud in the extension (or paste a token)".
+Rationale for not storing only the password: the token is a revocable session
+credential, while the config password is the whole account in plaintext on a server
+with no route auth — the password stays optional, the token is the working secret.
+
+Setup-wizard interaction: none. Per the 2026-08-24 wizard design's minimal-core scope,
+SC personal mixes are not a wizard step; the wizard's Done step points at installing
+the extension, and the extension's Connect button is the SC onboarding.
