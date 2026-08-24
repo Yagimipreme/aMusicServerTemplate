@@ -1632,3 +1632,57 @@ def test_follow_run_dispatches_in_background_not_synchronously(client):
     assert resp.status_code == 200
     assert json.loads(resp.data)["status"] == "started"
     assert elapsed < 0.2   # returned well before slow_run_once's 0.3s sleep completed
+
+
+# ── import job playlist write: get-or-create + append, never delete-and-recreate ──
+
+def test_get_or_append_playlist_creates_when_missing():
+    import sWebExt.py_server.server as srv
+    sub = MagicMock()
+    sub.find_playlist_id.return_value = None
+    sub.create_playlist.return_value = "new-id"
+
+    pid = srv._get_or_append_playlist(sub, "Import playlist", ["s1", "s2"])
+
+    assert pid == "new-id"
+    sub.create_playlist.assert_called_once_with("Import playlist", ["s1", "s2"])
+    sub.replace_playlist.assert_not_called()
+    sub.delete_playlist.assert_not_called()
+
+
+def test_get_or_append_playlist_appends_to_existing_without_deleting():
+    import sWebExt.py_server.server as srv
+    sub = MagicMock()
+    sub.find_playlist_id.return_value = "p1"
+    sub.get_playlist_song_ids.return_value = ["u1", "e1"]   # user track + engine track
+
+    pid = srv._get_or_append_playlist(sub, "Import playlist", ["s1"])
+
+    assert pid == "p1"
+    sub.delete_playlist.assert_not_called()
+    sub.create_playlist.assert_not_called()
+    sub.replace_playlist.assert_called_once_with("p1", ["u1", "e1", "s1"])
+
+
+def test_get_or_append_playlist_dedupes_ids_already_present():
+    import sWebExt.py_server.server as srv
+    sub = MagicMock()
+    sub.find_playlist_id.return_value = "p1"
+    sub.get_playlist_song_ids.return_value = ["e1", "e2"]
+
+    srv._get_or_append_playlist(sub, "Import playlist", ["e2", "s1"])
+
+    sub.replace_playlist.assert_called_once_with("p1", ["e1", "e2", "s1"])
+
+
+def test_import_tracks_call_site_uses_get_or_append_not_delete_and_recreate():
+    """The /import/tracks job's playlist write must go through
+    _get_or_append_playlist, not Subsonic.create_or_update_playlist's
+    delete-and-recreate (which destroys an existing playlist's contents and
+    identity, and on real Navidrome — before the songId encoding fix — even
+    recreated it empty)."""
+    import inspect
+    import sWebExt.py_server.server as srv
+    src = inspect.getsource(srv.import_tracks)
+    assert "create_or_update_playlist" not in src
+    assert "_get_or_append_playlist" in src

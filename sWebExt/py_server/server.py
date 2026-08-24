@@ -2300,6 +2300,24 @@ def preview():
 
 # ── Import tracks / status ─────────────────────────────────────────────────────
 
+def _get_or_append_playlist(subsonic, name: str, song_ids: list) -> str:
+    """Add song_ids to the named playlist, creating it if it doesn't exist yet.
+
+    Strictly additive — never deletes. An existing playlist's contents and
+    identity (id, owner, public flag, comment) are preserved, unlike
+    Subsonic.create_or_update_playlist's delete-and-recreate. Ids already in
+    the playlist are skipped so a re-import doesn't duplicate entries.
+    """
+    pid = subsonic.find_playlist_id(name)
+    if not pid:
+        return subsonic.create_playlist(name, song_ids)
+    existing = subsonic.get_playlist_song_ids(pid)
+    existing_set = set(existing)
+    merged = list(existing) + [sid for sid in song_ids if sid and sid not in existing_set]
+    subsonic.replace_playlist(pid, merged)
+    return pid
+
+
 @app.route("/import/tracks", methods=["POST"])
 def import_tracks():
     body = request.get_json(force=True, silent=True) or {}
@@ -2398,7 +2416,7 @@ def import_tracks():
                         if results:
                             song_ids.append(results[0].get("id"))
                 if song_ids:
-                    sub3.create_or_update_playlist(playlist_name, song_ids)
+                    _get_or_append_playlist(sub3, playlist_name, song_ids)
             except Exception:
                 logger.exception("[IMPORT] playlist creation failed")
 
