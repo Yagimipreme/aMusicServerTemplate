@@ -140,6 +140,60 @@ class Subsonic:
         sr = self._call("getPlaylist.view", id=playlist_id)
         return (sr.get("playlist", {}) or {})
 
+    def get_playlists(self) -> list:
+        """All playlists as raw Subsonic dicts."""
+        sr = self._call("getPlaylists.view")
+        raw = (sr.get("playlists", {}) or {}).get("playlist", []) or []
+        if isinstance(raw, dict):
+            raw = [raw]
+        return raw
+
+    def find_playlist_id(self, name: str):
+        """Case-insensitive lookup of a playlist id by name, or None."""
+        cf = (name or "").casefold()
+        for pl in self.get_playlists():
+            if (pl.get("name") or "").casefold() == cf:
+                return pl.get("id")
+        return None
+
+    def get_playlist_song_ids(self, playlist_id: str) -> list:
+        """Ordered song ids currently in the playlist."""
+        pl = self.get_playlist(playlist_id)
+        entries = pl.get("entry", []) or []
+        if isinstance(entries, dict):
+            entries = [entries]
+        return [e.get("id") for e in entries if e.get("id")]
+
+    def delete_playlist(self, playlist_id: str) -> bool:
+        sr = self._call("deletePlaylist.view", id=playlist_id)
+        return sr.get("status") == "ok"
+
+    def _playlist_song_params(self, song_ids) -> dict:
+        return {f"songId[{i}]": sid for i, sid in enumerate(song_ids)}
+
+    def replace_playlist(self, playlist_id: str, song_ids: list) -> bool:
+        """Overwrite an existing playlist's contents, keeping its identity.
+
+        createPlaylist.view with playlistId replaces the song list in place —
+        the playlist id, owner, public flag and comment all survive.
+        """
+        params = {"playlistId": playlist_id}
+        params.update(self._playlist_song_params(song_ids))
+        sr = self._call("createPlaylist.view", **params)
+        return sr.get("status") == "ok" or bool(sr.get("playlist"))
+
+    def create_playlist(self, name: str, song_ids: list) -> str:
+        params = {"name": name}
+        params.update(self._playlist_song_params(song_ids))
+        sr = self._call("createPlaylist.view", **params)
+        return (sr.get("playlist", {}) or {}).get("id", "")
+
+    def get_scan_status(self) -> dict:
+        sr = self._call("getScanStatus.view")
+        st = sr.get("scanStatus", {}) or {}
+        return {"scanning": bool(st.get("scanning", False)),
+                "count": int(st.get("count") or 0)}
+
     def create_or_update_playlist(self, name: str, song_ids: list) -> str:
         """Create (or overwrite) a playlist with the given name and song IDs.
 
