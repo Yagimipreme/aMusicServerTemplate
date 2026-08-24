@@ -172,3 +172,44 @@ svg.chart{display:block;max-width:360px;margin:auto}
 .tag-card .tc-stats{color:var(--acid);margin-bottom:6px}
 .tag-card .tc-similar{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .tag-card .tc-warn{color:#ffb04d;margin-top:8px}
+
+/* ---- DEDUP REVIEW ---- */
+.dedup-panel{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.dedup-group{border:1px solid var(--line);border-radius:3px;padding:8px;margin-bottom:8px}
+.dedup-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}
+.dedup-row.keep{color:var(--acid)}
+.dedup-row.gone{opacity:.35;text-decoration:line-through}
+.dedup-tag{flex:none;font-size:.52rem;letter-spacing:.1em;border:1px solid var(--acid-dim);border-radius:8px;padding:1px 6px}
+.dedup-path{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dedup-footer{display:flex;align-items:center;gap:10px;margin-top:6px}
+.dedup-result{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}
+
+/* ---- MIX ADVANCED ---- */
+.adv-wrap{margin-top:6px;border-top:1px solid var(--line);padding-top:8px}
+.adv-toggle{font-family:'JetBrains Mono';font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);cursor:pointer;padding:4px 0}
+.adv-toggle:hover{color:var(--acid)}
+.adv-body{padding-top:4px}
+
+/* ---- PREVIEW ---- */
+.result .play{flex:none;background:none;border:1px solid var(--line);border-radius:50%;width:26px;height:26px;
+  color:var(--mut);font-size:.66rem;cursor:pointer;transition:color .15s,border-color .15s}
+.result .play:hover{color:var(--acid);border-color:var(--acid-dim)}
+.result .play.on{color:var(--acid);border-color:var(--acid)}
+.miniplayer{position:fixed;bottom:calc(56px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  width:100%;max-width:430px;display:flex;align-items:center;gap:10px;z-index:39;
+  background:rgba(10,10,12,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:8px 14px}
+.mp-title{flex:1;min-width:0;font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-btn{flex:none;background:none;border:0;color:var(--acid);font-size:.8rem;cursor:pointer;padding:4px 6px}
+.mp-close{color:var(--mut)}
+.mp-close:hover{color:var(--danger)}
+
+/* ---- SHARE / IMPORT CARDS ---- */
+.share-half{border-top:1px solid var(--line);margin-top:10px;padding-top:10px}
+.share-sub{font-family:'JetBrains Mono';font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+.share-code{font-family:'JetBrains Mono';font-size:.6rem;width:100%;resize:vertical}
+.share-status{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut)}
+.share-preview,.imp-preview{max-height:180px;overflow-y:auto;margin:8px 0}
+.imp-row{font-family:'JetBrains Mono';font-size:.62rem;color:var(--mut);padding:2px 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.imp-more{color:var(--acid)}

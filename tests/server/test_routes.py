@@ -62,6 +62,75 @@ def test_post_library_dedup_report(client):
     assert resp.status_code == 200
 
 
+# ── /library/dedup/delete ─────────────────────────────────────────────────────
+
+def test_dedup_delete_removes_listed_files(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"
+    song_dir.mkdir()
+    f1 = song_dir / "dup1.mp3"; f1.write_bytes(b"x")
+    f2 = song_dir / "dup2.mp3"; f2.write_bytes(b"x")
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete",
+                           json={"paths": [str(f1), str(f2)]})
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert sorted(data["deleted"]) == sorted([str(f1), str(f2)])
+    assert data["errors"] == []
+    assert not f1.exists() and not f2.exists()
+
+
+def test_dedup_delete_rejects_path_outside_song_dir(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    outside = tmp_path / "secret.mp3"; outside.write_bytes(b"x")
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": [str(outside)]})
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["deleted"] == []
+    assert data["errors"][0]["path"] == str(outside)
+    assert "outside" in data["errors"][0]["error"]
+    assert outside.exists()   # untouched
+
+
+def test_dedup_delete_rejects_traversal(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    outside = tmp_path / "secret.mp3"; outside.write_bytes(b"x")
+    traversal = str(song_dir / ".." / "secret.mp3")
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": [traversal]})
+    assert json.loads(resp.data)["deleted"] == []
+    assert outside.exists()
+
+
+def test_dedup_delete_rejects_directory(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    sub = song_dir / "album"; sub.mkdir()
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": [str(sub)]})
+    assert json.loads(resp.data)["deleted"] == []
+    assert sub.exists()
+
+
+def test_dedup_delete_requires_paths(client, tmp_path):
+    import sWebExt.py_server.server as srv
+    song_dir = tmp_path / "music"; song_dir.mkdir()
+    with patch.object(srv, "_get_config", return_value={"song_dir": str(song_dir)}):
+        resp = client.post("/library/dedup/delete", json={"paths": []})
+    assert resp.status_code == 400
+
+
+def test_dedup_delete_disabled_without_song_dir(client):
+    import sWebExt.py_server.server as srv
+    with patch.object(srv, "_get_config", return_value={}):
+        resp = client.post("/library/dedup/delete", json={"paths": ["/x.mp3"]})
+    assert resp.status_code == 503
+    assert json.loads(resp.data)["status"] == "disabled"
+
+
 def test_post_download_dispatcher_no_url(client):
     resp = client.post("/", json={})
     # No matching script: 404
@@ -1405,3 +1474,215 @@ def test_genres_vocab_cached_second_call(client, monkeypatch, tmp_path):
         client.get("/genres/vocab")
         client.get("/genres/vocab")
     assert len(calls) == 1
+
+
+# ── /sc/preview (progressive resolution) ──────────────────────────────────────
+
+def _sc_client_stub(client_id="CID", get_return=None, get_side_effect=None):
+    """SCClient stub — sc_preview must route through sc.get(path), which
+    injects client_id and handles 401 refresh itself, never a raw
+    unauthenticated requests.get() call."""
+    stub = MagicMock(client_id=client_id)
+    if get_side_effect is not None:
+        stub.get.side_effect = get_side_effect
+    else:
+        stub.get.return_value = get_return if get_return is not None else {}
+    return stub
+
+
+def test_sc_preview_resolves_progressive_to_cdn_url(client):
+    sc = _sc_client_stub(get_return={"url": "https://cf-media.sndcdn.com/x.mp3?Policy=abc"})
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["status"] == "ok"
+    assert data["stream_url"] == "https://cf-media.sndcdn.com/x.mp3?Policy=abc"
+    # Routed through the authenticated SC client, not a raw requests.get —
+    # sc.get() injects client_id and retries on 401 itself.
+    assert sc.get.call_args.args[0] == "/media/1/progressive"
+
+
+def test_sc_preview_unavailable_without_progressive_url(client):
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=_sc_client_stub()):
+        resp = client.get("/sc/preview?progressive_url=")
+    assert resp.status_code == 400
+
+
+def test_sc_preview_unavailable_when_sc_returns_no_url(client):
+    sc = _sc_client_stub(get_return={})
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "unavailable"
+
+
+def test_sc_preview_unavailable_without_client(client):
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=None):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "unavailable"
+
+
+def test_sc_preview_error_on_upstream_exception(client):
+    sc = _sc_client_stub(get_side_effect=Exception("boom"))
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 500
+    assert json.loads(resp.data)["status"] == "error"
+
+
+def test_sc_preview_accepts_legacy_stream_url_param(client):
+    sc = _sc_client_stub(get_return={"url": "https://cf-media.sndcdn.com/y.mp3"})
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?stream_url=https://api-v2.soundcloud.com/media/1/progressive")
+    assert json.loads(resp.data)["stream_url"] == "https://cf-media.sndcdn.com/y.mp3"
+
+
+# ── /sc/preview SSRF guard ──────────────────────────────────────────────────
+
+def test_sc_preview_rejects_non_soundcloud_host(client):
+    sc = _sc_client_stub()
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=http://169.254.169.254/latest/meta-data/")
+    assert resp.status_code == 400
+    assert sc.get.called is False
+
+
+def test_sc_preview_rejects_lookalike_host_suffix_bypass(client):
+    """A naive startswith()/`in` host check is bypassable by suffixing the
+    real host onto an attacker-controlled domain — must be an exact hostname
+    match, not a prefix/substring match."""
+    sc = _sc_client_stub()
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=https://api-v2.soundcloud.com.evil.com/x")
+    assert resp.status_code == 400
+    assert sc.get.called is False
+
+
+def test_sc_preview_rejects_non_https_scheme(client):
+    sc = _sc_client_stub()
+    with patch("sWebExt.py_server.server._get_sc_client", return_value=sc):
+        resp = client.get("/sc/preview?progressive_url=http://api-v2.soundcloud.com/media/1/progressive")
+    assert resp.status_code == 400
+    assert sc.get.called is False
+
+
+
+# ── /share/import redirect ────────────────────────────────────────────────────
+
+def test_share_import_redirects_to_library_with_payload(client):
+    resp = client.get("/share/import?v=1&d=eyJhIjoxfQ")
+    assert resp.status_code in (301, 302)
+    assert resp.headers["Location"] == "/?share=eyJhIjoxfQ#library"
+
+
+def test_share_import_without_payload_redirects_to_library(client):
+    resp = client.get("/share/import")
+    assert resp.status_code in (301, 302)
+    assert resp.headers["Location"] == "/#library"
+
+
+def test_share_import_never_redirects_to_explore(client):
+    resp = client.get("/share/import?v=1&d=abc")
+    assert "/explore" not in resp.headers["Location"]
+
+
+def test_share_import_quotes_payload(client):
+    resp = client.get("/share/import?v=1&d=aGVsbG8%3D")
+    assert "explore" not in resp.headers["Location"]
+    assert resp.headers["Location"].startswith("/?share=")
+    assert "#library" in resp.headers["Location"]
+
+
+def test_preview_route_uses_resolved_yt_dlp_binary(client):
+    """/preview must invoke _YT_DLP, never a hardcoded .venv path."""
+    import sWebExt.py_server.server as srv
+    import subprocess as _sp
+    completed = _sp.CompletedProcess(
+        args=[], returncode=0,
+        stdout=json.dumps({"url": "https://stream", "title": "T", "uploader": "A"}),
+        stderr="")
+    with patch("subprocess.run", return_value=completed) as srun:
+        resp = client.get("/preview?source=yt&artist=a&title=t")
+    assert resp.status_code == 200
+    assert srun.call_args.args[0][0] == srv._YT_DLP
+    assert ".venv/bin/yt-dlp" not in srun.call_args.args[0][0]
+
+
+# ── /follow/run dispatches in the background ──────────────────────────────────
+
+def test_follow_run_dispatches_in_background_not_synchronously(client):
+    """POST /follow/run must not block on _run_follow_once — sync_playlist's
+    scan waits alone can take minutes, long enough to hit a browser/proxy
+    timeout. Same fire-and-forget pattern POST /follow already uses for its
+    immediate backfill kick."""
+    import sWebExt.py_server.server as srv
+    import time as _time
+
+    def slow_run_once():
+        _time.sleep(0.3)
+        return {"status": "ok", "acquired": 1, "unavailable": 0}
+
+    with patch.object(srv, "_run_follow_once", side_effect=slow_run_once):
+        t0 = _time.monotonic()
+        resp = client.post("/follow/run")
+        elapsed = _time.monotonic() - t0
+        _time.sleep(0.4)   # let the background thread finish before the patch exits
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "started"
+    assert elapsed < 0.2   # returned well before slow_run_once's 0.3s sleep completed
+
+
+# ── import job playlist write: get-or-create + append, never delete-and-recreate ──
+
+def test_get_or_append_playlist_creates_when_missing():
+    import sWebExt.py_server.server as srv
+    sub = MagicMock()
+    sub.find_playlist_id.return_value = None
+    sub.create_playlist.return_value = "new-id"
+
+    pid = srv._get_or_append_playlist(sub, "Import playlist", ["s1", "s2"])
+
+    assert pid == "new-id"
+    sub.create_playlist.assert_called_once_with("Import playlist", ["s1", "s2"])
+    sub.replace_playlist.assert_not_called()
+    sub.delete_playlist.assert_not_called()
+
+
+def test_get_or_append_playlist_appends_to_existing_without_deleting():
+    import sWebExt.py_server.server as srv
+    sub = MagicMock()
+    sub.find_playlist_id.return_value = "p1"
+    sub.get_playlist_song_ids.return_value = ["u1", "e1"]   # user track + engine track
+
+    pid = srv._get_or_append_playlist(sub, "Import playlist", ["s1"])
+
+    assert pid == "p1"
+    sub.delete_playlist.assert_not_called()
+    sub.create_playlist.assert_not_called()
+    sub.replace_playlist.assert_called_once_with("p1", ["u1", "e1", "s1"])
+
+
+def test_get_or_append_playlist_dedupes_ids_already_present():
+    import sWebExt.py_server.server as srv
+    sub = MagicMock()
+    sub.find_playlist_id.return_value = "p1"
+    sub.get_playlist_song_ids.return_value = ["e1", "e2"]
+
+    srv._get_or_append_playlist(sub, "Import playlist", ["e2", "s1"])
+
+    sub.replace_playlist.assert_called_once_with("p1", ["e1", "e2", "s1"])
+
+
+def test_import_tracks_call_site_uses_get_or_append_not_delete_and_recreate():
+    """The /import/tracks job's playlist write must go through
+    _get_or_append_playlist, not Subsonic.create_or_update_playlist's
+    delete-and-recreate (which destroys an existing playlist's contents and
+    identity, and on real Navidrome — before the songId encoding fix — even
+    recreated it empty)."""
+    import inspect
+    import sWebExt.py_server.server as srv
+    src = inspect.getsource(srv.import_tracks)
+    assert "create_or_update_playlist" not in src
+    assert "_get_or_append_playlist" in src

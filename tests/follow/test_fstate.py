@@ -59,3 +59,28 @@ def test_pending_add_bump_drop(state_path):
     assert st.pending()[0]["attempts"] == 2
     st.drop_pending("rg-1")
     assert st.pending() == []
+
+
+def test_follow_playlist_ledger_starts_blank(tmp_path):
+    from follow import fstate
+    st = fstate.load(str(tmp_path / "f.json"))
+    assert st.playlist_ledger() == {"playlist_id": "", "owned": [], "pending": [], "migrated": False}
+
+
+def test_follow_playlist_ledger_round_trips(tmp_path):
+    from follow import fstate
+    p = str(tmp_path / "f.json")
+    st = fstate.load(p)
+    led = st.playlist_ledger()
+    led.update({"playlist_id": "p9", "owned": ["x"], "pending": [], "migrated": True})
+    st.save()
+    assert fstate.load(p).playlist_ledger() == {
+        "playlist_id": "p9", "owned": ["x"], "pending": [], "migrated": True}
+
+
+def test_follow_load_tolerates_state_file_without_playlist_key(tmp_path):
+    import json
+    from follow import fstate
+    p = tmp_path / "f.json"
+    p.write_text(json.dumps({"acquired_release_groups": {}, "feed": []}), encoding="utf-8")
+    assert fstate.load(str(p)).playlist_ledger()["owned"] == []

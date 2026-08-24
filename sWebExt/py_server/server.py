@@ -210,7 +210,7 @@ def _run_follow_once() -> dict:
         result = runner.run_once(
             mb_client=mb, lb_client=lb, follows=follows, state=state,
             search_fn=deps.search_fn, download_fn=deps.download_fn,
-            song_dir=deps.song_dir, cfg=fc)
+            song_dir=deps.song_dir, cfg=fc, subsonic=deps.subsonic)
         logger.info("[FOLLOW] run complete: %s", result)
         return {"status": "ok", **result}
     finally:
@@ -905,6 +905,21 @@ def _run_repair_once(limit=None) -> dict:
         _repair_running.release()
 
 
+def _inside_song_dir(path: str, song_dir: str) -> bool:
+    """True only when `path` resolves to a location strictly inside `song_dir`.
+
+    Uses realpath on both sides so symlinks and ../ traversal cannot escape.
+    """
+    try:
+        root = os.path.realpath(song_dir)
+        target = os.path.realpath(path)
+    except Exception:
+        return False
+    if not root:
+        return False
+    return os.path.commonpath([root, target]) == root and target != root
+
+
 def _run_dedup_once(force_dry_run=False):
     if not _dedup_running.acquire(blocking=False):
         return {"status": "skipped", "reason": "already running"}
@@ -1288,6 +1303,39 @@ def dedup_report():
     result = _run_dedup_once(force_dry_run=True)
     code = 200 if result.get("status") in ("ok", "skipped", "disabled") else 500
     return jsonify(result), code
+
+
+@app.route("/library/dedup/delete", methods=["POST"])
+def dedup_delete():
+    """Delete an explicit list of duplicate files, validated against song_dir."""
+    body = request.get_json(force=True, silent=True) or {}
+    paths = body.get("paths") or []
+    if not isinstance(paths, list) or not paths:
+        return jsonify({"status": "error", "error": "paths required"}), 400
+
+    cfg = _get_config()
+    song_dir = cfg.get("song_dir", "")
+    if not song_dir:
+        return jsonify({"status": "disabled", "reason": "song_dir not set"}), 503
+
+    deleted, errors = [], []
+    for p in paths:
+        if not isinstance(p, str) or not p:
+            errors.append({"path": str(p), "error": "not a path"})
+            continue
+        if not _inside_song_dir(p, song_dir):
+            errors.append({"path": p, "error": "outside song_dir"})
+            continue
+        if not os.path.isfile(p):
+            errors.append({"path": p, "error": "not a file"})
+            continue
+        try:
+            os.remove(p)
+            deleted.append(p)
+            logger.info("[DEDUP] deleted %s", p)
+        except Exception as e:
+            errors.append({"path": p, "error": str(e)})
+    return jsonify({"status": "ok", "deleted": deleted, "errors": errors})
 
 
 @app.route("/library/enrich", methods=["POST"])
@@ -1726,8 +1774,16 @@ def follow_remove(mbid):
 
 @app.route("/follow/run", methods=["POST"])
 def follow_run():
-    result = _run_follow_once()
-    return jsonify(result)
+    """Kick off a follow run in the background.
+
+    _run_follow_once can take minutes end to end (sync_playlist's playlist
+    scan waits alone), long enough to hit a browser/proxy request timeout if
+    run synchronously in the request handler. Mirrors POST /follow's existing
+    fire-and-forget dispatch for its immediate backfill kick; poll GET /follow
+    (state.last_run) or GET /follow/feed for completion.
+    """
+    threading.Thread(target=_run_follow_once, daemon=True).start()
+    return jsonify({"status": "started"})
 
 
 @app.route("/follow/feed", methods=["GET"])
@@ -2037,16 +2093,60 @@ def sc_search_tracks():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+_SC_API_HOST = "api-v2.soundcloud.com"
+
+
+def _sc_api_path(url: str):
+    """Validate `url` is an https://api-v2.soundcloud.com URL and return its
+    path (+ query, as a params dict) — or None if it isn't.
+
+    Exact hostname match only (not startswith/substring — a check like
+    url.startswith("https://api-v2.soundcloud.com") is bypassable with
+    https://api-v2.soundcloud.com.evil.com/...). Caller-supplied progressive_url
+    values must never be fetched directly (SSRF): this is only ever used to
+    build a path for the authenticated SCClient, which is pinned to the same
+    fixed API host regardless of what's passed here.
+    """
+    import urllib.parse as _up
+    parsed = _up.urlsplit(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != _SC_API_HOST:
+        return None
+    return parsed.path, dict(_up.parse_qsl(parsed.query))
+
+
 @app.route("/sc/preview", methods=["GET"])
 def sc_preview():
-    stream_url = request.args.get("stream_url", "")
-    if not stream_url:
-        return jsonify({"status": "error", "error": "stream_url required"}), 400
+    """Resolve a SoundCloud progressive transcoding to a directly playable CDN mp3.
+
+    SoundCloud's progressive transcoding endpoint answers {"url": "<signed CDN mp3>"}
+    when queried with a valid client_id. HLS manifests are never proxied — a track
+    with no progressive transcoding is simply reported unavailable.
+    """
+    progressive_url = (request.args.get("progressive_url")
+                       or request.args.get("stream_url") or "").strip()
+    if not progressive_url:
+        return jsonify({"status": "error", "error": "progressive_url required"}), 400
+
+    parsed = _sc_api_path(progressive_url)
+    if parsed is None:
+        return jsonify({"status": "error", "error": "progressive_url must be an "
+                        f"https://{_SC_API_HOST} URL"}), 400
+    path, params = parsed
+
     sc = _get_sc_client()
     if not sc:
         return jsonify({"status": "unavailable", "reason": "sc_client_id not configured"})
-    composed = f"{stream_url}?client_id={sc.client_id}"
-    return jsonify({"status": "ok", "stream_url": composed})
+    try:
+        # Routed through the authenticated SC client — never a raw unauthenticated
+        # request. sc.get() injects client_id itself and retries once on 401.
+        data = sc.get(path, params) or {}
+        cdn_url = data.get("url") or ""
+        if not cdn_url:
+            return jsonify({"status": "unavailable", "reason": "no progressive stream"})
+        return jsonify({"status": "ok", "stream_url": cdn_url})
+    except Exception as e:
+        logger.exception("[SC] preview resolve failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @app.route("/sc/set/<int:set_id>/tracks", methods=["GET"])
@@ -2173,7 +2273,7 @@ def preview():
             query = url if url else f"ytsearch:{artist} {title}"
             try:
                 result = subprocess.run(
-                    [".venv/bin/yt-dlp", "--dump-json", "-f", "bestaudio/best",
+                    [_YT_DLP, "--dump-json", "-f", "bestaudio/best",
                      "--no-playlist", query],
                     capture_output=True, text=True, timeout=20,
                     cwd=_PROJECT_ROOT,
@@ -2199,6 +2299,24 @@ def preview():
 
 
 # ── Import tracks / status ─────────────────────────────────────────────────────
+
+def _get_or_append_playlist(subsonic, name: str, song_ids: list) -> str:
+    """Add song_ids to the named playlist, creating it if it doesn't exist yet.
+
+    Strictly additive — never deletes. An existing playlist's contents and
+    identity (id, owner, public flag, comment) are preserved, unlike
+    Subsonic.create_or_update_playlist's delete-and-recreate. Ids already in
+    the playlist are skipped so a re-import doesn't duplicate entries.
+    """
+    pid = subsonic.find_playlist_id(name)
+    if not pid:
+        return subsonic.create_playlist(name, song_ids)
+    existing = subsonic.get_playlist_song_ids(pid)
+    existing_set = set(existing)
+    merged = list(existing) + [sid for sid in song_ids if sid and sid not in existing_set]
+    subsonic.replace_playlist(pid, merged)
+    return pid
+
 
 @app.route("/import/tracks", methods=["POST"])
 def import_tracks():
@@ -2298,7 +2416,7 @@ def import_tracks():
                         if results:
                             song_ids.append(results[0].get("id"))
                 if song_ids:
-                    sub3.create_or_update_playlist(playlist_name, song_ids)
+                    _get_or_append_playlist(sub3, playlist_name, song_ids)
             except Exception:
                 logger.exception("[IMPORT] playlist creation failed")
 
@@ -2393,11 +2511,12 @@ def share_parse():
 
 @app.route("/share/import", methods=["GET"])
 def share_import():
-    """Receive shared link — redirect to explore page with payload in fragment."""
+    """Receive a shared link — hand the payload to the Library screen's Share card."""
+    import urllib.parse as _up
     d = request.args.get("d", "")
     if d:
-        return redirect(f"/explore#import:{d}")
-    return redirect("/explore")
+        return redirect(f"/?share={_up.quote(d, safe='')}#library")
+    return redirect("/#library")
 
 
 # ── Startup + zeroconf ────────────────────────────────────────────────────────

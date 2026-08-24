@@ -197,6 +197,32 @@ def run_mix(deps, cfg):
         return {"acquired": len(acquired_paths), "m3u": m3u}
 
 
+def _existing_playlist_keys(deps, name: str) -> set:
+    """Keys already in the named playlist, so library picks don't repeat.
+
+    Prefers the live Navidrome playlist; falls back to the legacy .m3u file.
+    """
+    keys = set()
+    sub = getattr(deps, "subsonic", None)
+    if sub is not None and hasattr(sub, "find_playlist_id"):
+        try:
+            pid = sub.find_playlist_id(name)
+            if pid:
+                pl = sub.get_playlist(pid) or {}
+                entries = pl.get("entry", []) or []
+                if isinstance(entries, dict):
+                    entries = [entries]
+                for e in entries:
+                    p = e.get("path") or ""
+                    if p:
+                        keys.add(os.path.basename(p))
+                return keys
+        except Exception:
+            logger.exception("discover: could not read playlist %r via API", name)
+    return set(read_playlist_basenames(deps.song_dir, name))
+
+
+# Kept for the legacy run_weekly / run_mix paths.
 def _existing_playlist_basenames(song_dir: str, name: str) -> set:
     """Return set of basenames already in the named playlist's m3u."""
     return set(read_playlist_basenames(song_dir, name))
@@ -276,15 +302,21 @@ def run_profile(deps, cfg, profile):
 
     # library share + backfill of any new-share shortfall
     lib_paths = []
+    lib_ids = []
     lib_needed = count - len(acquired_paths) if lib_count > 0 or len(acquired_paths) < new_count else 0
     lib_needed = min(lib_needed, count - len(acquired_paths))
     if lib_needed > 0:
-        existing = _existing_playlist_basenames(deps.song_dir, profile["name"])
+        existing = _existing_playlist_keys(deps, profile["name"])
         from discover.library_pick import select_library_tracks
         picks = select_library_tracks(deps.subsonic, profile, existing, lib_needed,
                                       seed_artists=seed_artist_names,
                                       song_dir=deps.song_dir)
         lib_paths = [s["path"] for s in picks]
+        # Library picks are already Navidrome songs — select_library_tracks
+        # returns the raw search3/getSongsByGenre records, which carry a real
+        # song id. Pass those straight through to sync_playlist so the merge-
+        # aware API path doesn't drop them (they never went through m3u/download).
+        lib_ids = [s["id"] for s in picks if s.get("id")]
 
     # acquisition backfill: if library underdelivered, acquire more from fresh pool (spec §3b)
     lib_shortfall = lib_needed - len(lib_paths)
@@ -301,16 +333,28 @@ def run_profile(deps, cfg, profile):
                 break
 
     m3u = None
-    if acquired_paths or lib_paths:
-        m3u = write_weekly_mix(deps.song_dir, acquired_paths + lib_paths,
-                               name=profile["name"], cap=cap)
-        try:
-            deps.subsonic.start_scan()
-        except Exception:
-            logger.exception("discover: scan trigger failed")
+    playlist_result = None
+    all_paths = acquired_paths + lib_paths
+    if all_paths:
+        if hasattr(deps.subsonic, "replace_playlist"):
+            from discover.playlist_sync import sync_playlist
+            ledger = deps.state.playlist_ledger(profile["name"])
+            playlist_result = sync_playlist(
+                deps.subsonic, profile["name"], acquired_paths, ledger, cap,
+                song_dir=deps.song_dir, known_ids=lib_ids)
+        else:
+            logger.warning("discover: no Navidrome playlist API available — "
+                           "falling back to the m3u writer for %r", profile["name"])
+            m3u = write_weekly_mix(deps.song_dir, all_paths,
+                                   name=profile["name"], cap=cap)
+            try:
+                deps.subsonic.start_scan()
+            except Exception:
+                logger.exception("discover: scan trigger failed")
     deps.state.save(stamp_last_run=False)
     return {"profile": profile["id"], "acquired": len(acquired_paths),
-            "library_added": len(lib_paths), "m3u": m3u}
+            "library_added": len(lib_paths), "m3u": m3u,
+            "playlist": playlist_result}
 
 
 def run_daily(deps, cfg):

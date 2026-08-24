@@ -138,3 +138,111 @@ def test_get_playlist_artists_skips_blank_and_unknown_artists():
     result = c.get_playlist_artists("Mix")
     assert len(result) == 1
     assert result[0]["name"] == "Kobosil"
+
+
+def test_get_playlists_returns_raw_list():
+    c = make_client({"getPlaylists": {"subsonic-response": {"playlists": {"playlist": [
+        {"id": "1", "name": "Weekly Mix", "songCount": 3},
+    ]}}}})
+    assert c.get_playlists()[0]["name"] == "Weekly Mix"
+
+
+def test_find_playlist_id_is_case_insensitive():
+    c = make_client({"getPlaylists": {"subsonic-response": {"playlists": {"playlist": [
+        {"id": "7", "name": "Weekly Mix"},
+    ]}}}})
+    assert c.find_playlist_id("weekly mix") == "7"
+    assert c.find_playlist_id("Weekly Mix") == "7"
+
+
+def test_find_playlist_id_returns_none_when_absent():
+    c = make_client({"getPlaylists": {"subsonic-response": {"playlists": {}}}})
+    assert c.find_playlist_id("nope") is None
+
+
+def test_get_playlist_song_ids_preserves_order():
+    c = make_client({"getPlaylist": {"subsonic-response": {"playlist": {"entry": [
+        {"id": "b"}, {"id": "a"}, {"id": "c"},
+    ]}}}})
+    assert c.get_playlist_song_ids("1") == ["b", "a", "c"]
+
+
+def test_get_playlist_song_ids_empty_when_no_entries():
+    c = make_client({"getPlaylist": {"subsonic-response": {"playlist": {}}}})
+    assert c.get_playlist_song_ids("1") == []
+
+
+def test_replace_playlist_sends_playlist_id_and_repeated_song_id_params():
+    """Subsonic spec requires repeated songId=a&songId=b, NOT bracket-indexed
+    songId[0]=a&songId[1]=b — Navidrome reads p.Strings("songId") by exact key
+    and silently ignores bracket-indexed params, wiping the playlist."""
+    seen = {}
+
+    def fake_fetch(url):
+        seen["url"] = url
+        return {"subsonic-response": {"status": "ok"}}
+
+    from discover.subsonic import Subsonic
+    c = Subsonic("http://nd:4533", "u", "p", fetch_json=fake_fetch)
+    assert c.replace_playlist("42", ["s1", "s2"]) is True
+    assert "playlistId=42" in seen["url"]
+    assert "songId%5B0%5D" not in seen["url"]
+    assert "songId%5B1%5D" not in seen["url"]
+    assert "songId=s1" in seen["url"]
+    assert "songId=s2" in seen["url"]
+    assert "name=" not in seen["url"]
+
+
+def test_replace_playlist_empty_song_list_sends_no_song_id_param():
+    seen = {}
+
+    def fake_fetch(url):
+        seen["url"] = url
+        return {"subsonic-response": {"status": "ok"}}
+
+    from discover.subsonic import Subsonic
+    c = Subsonic("http://nd:4533", "u", "p", fetch_json=fake_fetch)
+    assert c.replace_playlist("42", []) is True
+    assert "songId" not in seen["url"]
+
+
+def test_create_or_update_playlist_sends_repeated_song_id_params_too(monkeypatch):
+    """create_or_update_playlist (used by the import job) had its own separate
+    copy of the bracket-indexed songId bug — must be fixed the same way."""
+    seen = {}
+
+    def fake_fetch(url):
+        if "getPlaylists" in url:
+            return {"subsonic-response": {"playlists": {}}}
+        seen["url"] = url
+        return {"subsonic-response": {"status": "ok", "playlist": {"id": "1"}}}
+
+    from discover.subsonic import Subsonic
+    c = Subsonic("http://nd:4533", "u", "p", fetch_json=fake_fetch)
+    c.create_or_update_playlist("New", ["s1", "s2"])
+    assert "songId%5B0%5D" not in seen["url"]
+    assert "songId=s1" in seen["url"]
+    assert "songId=s2" in seen["url"]
+
+
+def test_create_playlist_returns_new_id():
+    c = make_client({"createPlaylist": {"subsonic-response": {
+        "status": "ok", "playlist": {"id": "99"}}}})
+    assert c.create_playlist("New", ["a"]) == "99"
+
+
+def test_delete_playlist_reports_ok():
+    c = make_client({"deletePlaylist": {"subsonic-response": {"status": "ok"}}})
+    assert c.delete_playlist("5") is True
+
+
+def test_get_scan_status_parses_scanning_flag():
+    c = make_client({"getScanStatus": {"subsonic-response": {
+        "status": "ok", "scanStatus": {"scanning": False, "count": 1234}}}})
+    st = c.get_scan_status()
+    assert st == {"scanning": False, "count": 1234}
+
+
+def test_get_scan_status_defaults_when_missing():
+    c = make_client({"getScanStatus": {"subsonic-response": {"status": "ok"}}})
+    assert c.get_scan_status() == {"scanning": False, "count": 0}

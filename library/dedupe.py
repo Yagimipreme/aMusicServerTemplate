@@ -22,6 +22,12 @@ def _pick_keep(group):
     return min(pool, key=lambda r: os.path.getmtime(r["path"]))
 
 
+def _brief(record):
+    """Projection of a scan record safe to hand to the UI."""
+    return {"path": record["path"], "artist": record.get("artist", ""),
+            "title": record.get("title", "")}
+
+
 def run(song_dir, auto_delete=False):
     """Scan song_dir for duplicates. Returns report dict.
 
@@ -33,11 +39,18 @@ def run(song_dir, auto_delete=False):
 
     would_delete = []
     deleted = []
+    groups_detail = []
 
     for key, group in groups.items():
         keep = _pick_keep(group)
-        to_remove = [r["path"] for r in group if r["path"] != keep["path"]]
+        removable = [r for r in group if r["path"] != keep["path"]]
+        to_remove = [r["path"] for r in removable]
         would_delete.extend(to_remove)
+        groups_detail.append({
+            "key": key,
+            "keep": _brief(keep),
+            "remove": [_brief(r) for r in removable],
+        })
         logger.info("dedup: group %r — keep=%s, remove=%s", key, keep["path"], to_remove)
 
         if auto_delete:
@@ -49,4 +62,5 @@ def run(song_dir, auto_delete=False):
                 except Exception:
                     logger.exception("dedup: could not delete %s", path)
 
-    return {"groups": len(groups), "would_delete": would_delete, "deleted": deleted}
+    return {"groups": len(groups), "would_delete": would_delete,
+            "deleted": deleted, "groups_detail": groups_detail}

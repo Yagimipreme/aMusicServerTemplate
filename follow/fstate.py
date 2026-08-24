@@ -71,6 +71,17 @@ class FollowState:
         if next_run is not None:
             self._d["next_run"] = next_run
 
+    def playlist_ledger(self) -> dict:
+        """Mutable merge ledger for the NEW RELEASES playlist."""
+        from discover.state import blank_ledger
+        led = self._d.get("playlist")
+        if not isinstance(led, dict):
+            led = blank_ledger()
+            self._d["playlist"] = led
+        for k, v in blank_ledger().items():
+            led.setdefault(k, v)
+        return led
+
     def summary(self) -> dict:
         return {
             "unseen_count": self._d["unseen_count"],
@@ -96,6 +107,7 @@ def _empty() -> dict:
         "unseen_count": 0,
         "last_run": None,
         "next_run": None,
+        "playlist": {},
     }
 
 

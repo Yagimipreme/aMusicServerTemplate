@@ -28,6 +28,40 @@ def _fresh_single(mbid="m1", rg="rg-1", name="Song"):
              "primary_type": "Single", "artist_name": "A"}]
 
 
+def _run_happy_path(tmp_path, **overrides):
+    """Shared happy-path fixture: one release, resolved and acquired.
+
+    Forwards subsonic/assemble_fn (and any other run_once kwarg) via overrides.
+    """
+    st = fstate.load(str(tmp_path / "follow_state.json"))
+
+    def fake_resolve(search_fn, artists, per_artist=1):
+        a = artists[0]
+        return [{"artist": a["name"], "title": a["top_track"], "url": "u"}]
+
+    def fake_acquire(download_fn, candidate):
+        return [f"/songs/{candidate['title']}.mp3"]
+
+    def fake_assemble(song_dir, paths, name, cap):
+        return "/songs/" + name + ".m3u"
+
+    kwargs = dict(
+        mb_client=FakeMB({"rg-1": ["Song"]}),
+        lb_client=FakeLB(_fresh_single()),
+        follows=[_follow("m1", "A")],
+        state=st,
+        search_fn=None, download_fn=None, song_dir="/songs",
+        cfg={"lookback_days": 7, "default_backfill_days": 30,
+             "playlist_name": "NEW RELEASES", "playlist_cap": 100,
+             "notify": {"webhook_url": "", "ntfy_topic": ""}},
+        resolve_fn=fake_resolve, acquire_fn=fake_acquire,
+        assemble_fn=fake_assemble, push_fn=lambda *a, **k: None,
+        today="2026-06-14",
+    )
+    kwargs.update(overrides)
+    return runner.run_once(**kwargs)
+
+
 def test_happy_path_acquires_and_writes_playlist(state_path):
     st = fstate.load(state_path)
     written = {}
@@ -116,3 +150,35 @@ def test_failure_marks_pending_then_unavailable_after_3(state_path):
     # third attempt → dropped + recorded unavailable
     assert st.pending() == []
     assert any(e["status"] == "unavailable" for e in st.feed())
+
+
+def test_run_once_syncs_via_api_when_subsonic_is_given(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_sync(subsonic, name, new_paths, ledger, cap, **kw):
+        seen.update({"name": name, "paths": list(new_paths), "cap": cap})
+        ledger["owned"] = list(new_paths)
+        return {"status": "ok", "playlist_id": "p1", "added": len(new_paths),
+                "evicted": 0, "pending": 0, "migrated": True, "final_count": 1}
+
+    monkeypatch.setattr("discover.playlist_sync.sync_playlist", fake_sync)
+    # Build the same fixtures the existing happy-path test uses, plus a fake client
+    # that advertises the playlist API.
+    from types import SimpleNamespace
+    sub = SimpleNamespace(replace_playlist=lambda pid, ids: True)
+    result = _run_happy_path(tmp_path, subsonic=sub)     # see Step 2
+    assert seen["name"] == "NEW RELEASES"
+    assert result["acquired"] >= 1
+
+
+def test_run_once_still_writes_m3u_without_a_subsonic_client(tmp_path):
+    written = {}
+
+    def fake_assemble(song_dir, paths, name, cap):
+        written["name"] = name
+        written["paths"] = list(paths)
+        return "/songs/" + name + ".m3u"
+
+    result = _run_happy_path(tmp_path, assemble_fn=fake_assemble)
+    assert written["name"] == "NEW RELEASES"
+    assert written["paths"]

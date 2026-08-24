@@ -31,6 +31,56 @@ function fetchGenreVocab() {
 const screens = {};  // name -> {el, render}
 let _currentScreen = null;
 
+// ── Shared audio preview (one element for the whole app) ─────────────────────
+const Player = (() => {
+  let audio = null, curKey = null, onStop = null;
+
+  function els() {
+    return {
+      bar:    document.getElementById('miniplayer'),
+      toggle: document.getElementById('mp-toggle'),
+      title:  document.getElementById('mp-title'),
+      close:  document.getElementById('mp-close'),
+    };
+  }
+
+  function ensure() {
+    if (audio) return audio;
+    audio = new Audio();
+    audio.preload = 'none';
+    const e = els();
+    audio.onplay  = () => { e.toggle.textContent = '❚❚'; };
+    audio.onpause = () => { e.toggle.textContent = '▶'; };
+    audio.onended = () => stop();
+    e.toggle.onclick = () => { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); };
+    e.close.onclick = () => stop();
+    return audio;
+  }
+
+  function stop() {
+    if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
+    const e = els();
+    if (e.bar) e.bar.style.display = 'none';
+    if (e.title) e.title.textContent = '';
+    curKey = null;
+    if (onStop) { const f = onStop; onStop = null; f(); }
+  }
+
+  function play(key, url, label, stopCallback) {
+    const a = ensure();
+    if (onStop) { const f = onStop; onStop = null; f(); }
+    onStop = stopCallback || null;
+    curKey = key;
+    const e = els();
+    e.title.textContent = label || '';
+    e.bar.style.display = '';
+    a.src = url;
+    a.play().catch(() => {});
+  }
+
+  return {play, stop, current: () => curKey};
+})();
+
 function show(name) {
   if (name === _currentScreen) return;
   _currentScreen = name;
@@ -449,6 +499,59 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
   cancelBtn.onclick = closeTagEditor;
   inner.appendChild(genreRow);
 
+  // Manual artist chips row (only when mode=manual)
+  const artistRow = document.createElement('div');
+  artistRow.className = 'frow';
+  const artistLabel = document.createElement('label');
+  artistLabel.textContent = 'artists';
+  const artistChips = document.createElement('div');
+  artistChips.className = 'chips';
+  const artists = Array.isArray((mix.seeds || {}).artists) ? [...mix.seeds.artists] : [];
+
+  const artistInput = document.createElement('input');
+  artistInput.className = 'txt';
+  artistInput.type = 'text';
+  artistInput.placeholder = 'artist name… (Enter to add)';
+  artistInput.style.display = 'none';
+
+  function addArtist() {
+    const v = artistInput.value.trim();
+    if (v && !artists.some(a => a.toLowerCase() === v.toLowerCase())) artists.push(v);
+    artistInput.value = '';
+    artistInput.style.display = 'none';
+    renderArtistChips();
+  }
+  artistInput.onkeydown = (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); addArtist(); }
+    else if (ev.key === 'Escape') { artistInput.value = ''; artistInput.style.display = 'none'; renderArtistChips(); }
+  };
+  artistInput.onblur = () => { if (artistInput.value.trim()) addArtist(); else { artistInput.style.display = 'none'; renderArtistChips(); } };
+
+  function renderArtistChips() {
+    artistChips.textContent = '';
+    artists.forEach((a, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = a + ' ✕';
+      chip.onclick = () => { artists.splice(i, 1); renderArtistChips(); };
+      artistChips.appendChild(chip);
+    });
+    const addChip = document.createElement('span');
+    addChip.className = 'chip add';
+    addChip.textContent = '+ add';
+    addChip.onclick = () => {
+      addChip.style.display = 'none';
+      artistInput.style.display = '';
+      artistInput.focus();
+    };
+    artistChips.appendChild(addChip);
+  }
+  renderArtistChips();
+  artistRow.appendChild(artistLabel);
+  artistRow.appendChild(artistChips);
+  inner.appendChild(artistRow);
+  inner.appendChild(artistInput);
+
   // Playlist input row (only when mode=playlist)
   const playlistRow = document.createElement('div');
   playlistRow.className = 'frow';
@@ -465,8 +568,10 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
 
   // Combined mode change handler (genre + playlist visibility)
   function updateModeVisibility() {
-    genreRow.style.display = modeSel.value === 'genre' ? '' : 'none';
+    genreRow.style.display    = modeSel.value === 'genre'    ? '' : 'none';
+    artistRow.style.display   = modeSel.value === 'manual'   ? '' : 'none';
     playlistRow.style.display = modeSel.value === 'playlist' ? '' : 'none';
+    if (modeSel.value !== 'manual') artistInput.style.display = 'none';
   }
   modeSel.onchange = updateModeVisibility;
   updateModeVisibility();
@@ -490,6 +595,65 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
   sizeRow.appendChild(countInput);
   sizeRow.appendChild(capInput);
   inner.appendChild(sizeRow);
+
+  // Advanced (per-mix quality overrides — blank field = inherit global default)
+  const advWrap = document.createElement('div');
+  advWrap.className = 'adv-wrap';
+  const advToggle = document.createElement('div');
+  advToggle.className = 'adv-toggle';
+  advToggle.textContent = '▸ advanced';
+  const advBody = document.createElement('div');
+  advBody.className = 'adv-body';
+  advBody.style.display = 'none';
+  advToggle.onclick = () => {
+    const open = advBody.style.display === 'none';
+    advBody.style.display = open ? '' : 'none';
+    advToggle.textContent = (open ? '▾' : '▸') + ' advanced';
+  };
+
+  const q = mix.quality || {};
+  const qInputs = {};
+
+  function advNumRow(key, label, placeholder) {
+    const row = document.createElement('div');
+    row.className = 'frow';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const inp = document.createElement('input');
+    inp.className = 'txt';
+    inp.type = 'number';
+    inp.placeholder = placeholder;
+    inp.value = (q[key] === undefined || q[key] === null) ? '' : String(q[key]);
+    row.appendChild(lab);
+    row.appendChild(inp);
+    advBody.appendChild(row);
+    qInputs[key] = inp;
+  }
+
+  advNumRow('min_artist_listeners', 'min listeners', 'inherit (5000)');
+  advNumRow('candidate_oversample', 'oversample',    'inherit (3)');
+  advNumRow('seed_artist_count',    'seed artists',  'inherit (20)');
+
+  const perRow = document.createElement('div');
+  perRow.className = 'frow';
+  const perLab = document.createElement('label');
+  perLab.textContent = 'lastfm period';
+  const perSel = document.createElement('select');
+  [['', 'inherit'], ['7day', '7day'], ['1month', '1month'], ['3month', '3month'],
+   ['6month', '6month'], ['12month', '12month'], ['overall', 'overall']].forEach(([v, t]) => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = t;
+    if ((q.lastfm_period || '') === v) o.selected = true;
+    perSel.appendChild(o);
+  });
+  perRow.appendChild(perLab);
+  perRow.appendChild(perSel);
+  advBody.appendChild(perRow);
+
+  advWrap.appendChild(advToggle);
+  advWrap.appendChild(advBody);
+  inner.appendChild(advWrap);
 
   // Actions row
   const actions = document.createElement('div');
@@ -556,6 +720,20 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
     const resolvedId   = isNew ? (idInput   ? idInput.value   : mix.id)   : mix.id;
     const resolvedName = isNew ? (nameInput ? nameInput.value : mix.name) : mix.name;
 
+    // Advanced: only include fields the user actually filled in; anything else
+    // is omitted so the engine falls through to the global cfg["discover"] default.
+    const quality = {};
+    Object.keys(mix.quality || {}).forEach(k => {
+      if (!(k in qInputs) && k !== 'lastfm_period') quality[k] = mix.quality[k];  // preserve keys with no UI (e.g. lastfm_periods)
+    });
+    ['min_artist_listeners', 'candidate_oversample', 'seed_artist_count'].forEach(k => {
+      const raw = (qInputs[k].value || '').trim();
+      if (raw === '') return;
+      const n = parseInt(raw, 10);
+      if (!Number.isNaN(n)) quality[k] = n;
+    });
+    if (perSel.value) quality.lastfm_period = perSel.value;
+
     const profile = {
       id:             resolvedId,
       name:           resolvedName,
@@ -572,10 +750,10 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
       seeds: {
         mode:     modeSel.value,
         genres:   modeSel.value === 'genre'    ? [...genres]          : [],
-        artists:  (mix.seeds || {}).artists    || [],
+        artists:  modeSel.value === 'manual'   ? [...artists]      : ((mix.seeds || {}).artists || []),
         playlist: modeSel.value === 'playlist' ? playlistInput.value : '',
       },
-      quality: mix.quality || {},
+      quality: quality,
     };
 
     try {
@@ -629,6 +807,57 @@ function buildMixCard(mix, nextRuns, isNew, lastRuns) {
 // Hoisted to module scope so timers survive across re-renders and can be cleared
 let enrichPollTimer = null;
 let repairPollTimer = null;
+
+// ── Shared batch-import driver (used by the Share and Import cards) ──────────
+async function runImportJob(tracks, playlistName, fillEl, statusEl) {
+  statusEl.textContent = 'queuing ' + tracks.length + ' tracks…';
+  const start = await API('/import/tracks', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tracks, playlist_name: playlistName}),
+  });
+  if (start.status !== 'ok' || !start.job_id) throw new Error(start.error || 'import failed to start');
+
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(async () => {
+      try {
+        const s = await API('/import/status?job_id=' + encodeURIComponent(start.job_id));
+        const total = s.total || 0;
+        const done = s.done || 0;
+        const errs = s.errors || 0;
+        fillEl.style.width = total ? Math.round(((done + errs) / total) * 100) + '%' : '0%';
+        statusEl.textContent = done + '/' + total + ' done' + (errs ? (' · ' + errs + ' failed') : '');
+        // The server only increments `done` on success and `errors` on failure
+        // (server.py's import job) — with any failed track, `done` alone never
+        // reaches `total`, so completion must count both.
+        if (total && (done + errs) >= total) {
+          clearInterval(timer);
+          resolve({total, done, errors: errs});
+        }
+      } catch(e) {
+        clearInterval(timer);
+        reject(e);
+      }
+    }, 2000);
+  });
+}
+
+function renderTrackPreview(container, tracks, limit) {
+  container.textContent = '';
+  const max = limit || 50;
+  tracks.slice(0, max).forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'imp-row';
+    row.textContent = [t.artist, t.title].filter(Boolean).join(' — ') || '(untitled)';
+    container.appendChild(row);
+  });
+  if (tracks.length > max) {
+    const more = document.createElement('div');
+    more.className = 'imp-row imp-more';
+    more.textContent = '…and ' + (tracks.length - max) + ' more';
+    container.appendChild(more);
+  }
+}
 
 async function renderLibrary() {
   if (enrichPollTimer) { clearInterval(enrichPollTimer); enrichPollTimer = null; }
@@ -759,20 +988,130 @@ async function renderLibrary() {
   }
 
   // ── 3. De-duplicate ───────────────────────────────────────────────────────────
-  const dedupCard = makeToolCard('De-duplicate', 'find files with identical titles', 'run', async () => {
+  const dedupPanel = document.createElement('div');
+  dedupPanel.className = 'dedup-panel';
+  dedupPanel.style.display = 'none';
+
+  const dedupCard = makeToolCard('De-duplicate', 'review duplicate titles before deleting', 'scan', async () => {
     dedupCard._btn.disabled = true;
     dedupCard._statusSpan.textContent = 'scanning…';
+    dedupPanel.textContent = '';
+    dedupPanel.style.display = 'none';
     try {
-      const r = await API('/library/dedup/run', {method: 'POST'});
-      const n = (r.would_delete || []).length;
-      dedupCard._statusSpan.textContent = n ? n + ' duplicates found' : 'no duplicates';
+      const r = await API('/library/dedup/report', {method: 'POST'});
+      const groups = r.groups_detail || [];
+      const dupCount = groups.reduce((n, g) => n + (g.remove || []).length, 0);
+      dedupCard._statusSpan.textContent = dupCount
+        ? (dupCount + ' duplicates in ' + groups.length + ' groups')
+        : 'no duplicates';
+      if (dupCount) renderDedupGroups(groups);
     } catch(e) {
       dedupCard._statusSpan.textContent = 'Error: ' + (e.message || 'unknown');
     } finally {
       dedupCard._btn.disabled = false;
     }
   });
+  dedupCard.appendChild(dedupPanel);
   el.appendChild(dedupCard);
+
+  function renderDedupGroups(groups) {
+    dedupPanel.textContent = '';
+    dedupPanel.style.display = '';
+    const boxes = [];
+
+    groups.forEach(g => {
+      const gEl = document.createElement('div');
+      gEl.className = 'dedup-group';
+
+      const keepEl = document.createElement('div');
+      keepEl.className = 'dedup-row keep';
+      const keepTag = document.createElement('span');
+      keepTag.className = 'dedup-tag';
+      keepTag.textContent = 'KEEP';
+      const keepTxt = document.createElement('span');
+      keepTxt.className = 'dedup-path';
+      keepTxt.textContent = dedupLabel(g.keep);
+      keepTxt.title = (g.keep && g.keep.path) || '';
+      keepEl.appendChild(keepTag);
+      keepEl.appendChild(keepTxt);
+      gEl.appendChild(keepEl);
+
+      (g.remove || []).forEach(r => {
+        const row = document.createElement('div');
+        row.className = 'dedup-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.dataset.path = r.path;
+        const txt = document.createElement('span');
+        txt.className = 'dedup-path';
+        txt.textContent = dedupLabel(r);
+        txt.title = r.path || '';
+        row.appendChild(cb);
+        row.appendChild(txt);
+        gEl.appendChild(row);
+        boxes.push(cb);
+      });
+
+      dedupPanel.appendChild(gEl);
+    });
+
+    const footer = document.createElement('div');
+    footer.className = 'dedup-footer';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn del';
+    const result = document.createElement('span');
+    result.className = 'dedup-result';
+
+    function refreshLabel() {
+      const n = boxes.filter(b => b.checked).length;
+      delBtn.textContent = 'Delete ' + n + ' file' + (n === 1 ? '' : 's');
+      delBtn.disabled = n === 0;
+    }
+    boxes.forEach(b => { b.onchange = refreshLabel; });
+    refreshLabel();
+
+    delBtn.onclick = async () => {
+      const paths = boxes.filter(b => b.checked).map(b => b.dataset.path);
+      if (!paths.length) return;
+      delBtn.disabled = true;
+      result.textContent = 'deleting…';
+      try {
+        const r = await API('/library/dedup/delete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({paths}),
+        });
+        const nDel = (r.deleted || []).length;
+        const nErr = (r.errors || []).length;
+        result.textContent = nDel + ' deleted' + (nErr ? (', ' + nErr + ' failed') : '');
+        dedupCard._statusSpan.textContent = 'rescan to refresh';
+        const done = new Set(r.deleted || []);
+        boxes.forEach(b => {
+          if (done.has(b.dataset.path)) {
+            b.checked = false;
+            b.disabled = true;
+            b.parentElement.classList.add('gone');
+          }
+        });
+        refreshLabel();
+      } catch(e) {
+        result.textContent = 'Error: ' + (e.message || 'unknown');
+        delBtn.disabled = false;
+      }
+    };
+
+    footer.appendChild(delBtn);
+    footer.appendChild(result);
+    dedupPanel.appendChild(footer);
+  }
+
+  function dedupLabel(rec) {
+    if (!rec) return '';
+    const name = (rec.path || '').split('/').pop();
+    const who = [rec.artist, rec.title].filter(Boolean).join(' — ');
+    return who ? (who + '  ·  ' + name) : name;
+  }
 
   // ── 4. Title cleanup ──────────────────────────────────────────────────────────
   let suffixesExpanded = false;
@@ -816,6 +1155,370 @@ async function renderLibrary() {
   suffixWrapper.appendChild(suffixRow);
   suffixWrapper.appendChild(suffixPanel);
   el.appendChild(suffixWrapper);  // appended synchronously
+
+  // ── 5. Share ─────────────────────────────────────────────────────────────────
+  const shareCard = document.createElement('div');
+  shareCard.className = 'tool';
+  shareCard.style.cssText = 'flex-direction:column;align-items:stretch;padding:15px 14px 4px';
+  const shareHead = document.createElement('div');
+  shareHead.className = 't-name';
+  const shareTitle = document.createElement('b');
+  shareTitle.textContent = 'Share';
+  const shareDesc = document.createElement('span');
+  shareDesc.textContent = 'send a playlist to another server, or receive one';
+  shareHead.appendChild(shareTitle);
+  shareHead.appendChild(shareDesc);
+  shareCard.appendChild(shareHead);
+
+  // — Send half —
+  const sendWrap = document.createElement('div');
+  sendWrap.className = 'share-half';
+  const sendLabel = document.createElement('div');
+  sendLabel.className = 'share-sub';
+  sendLabel.textContent = 'send';
+  const plSel = document.createElement('select');
+  plSel.className = 'txt';
+  const codeBtn = document.createElement('button');
+  codeBtn.className = 'btn ghost';
+  codeBtn.textContent = 'get code';
+  const codeArea = document.createElement('textarea');
+  codeArea.className = 'txt share-code';
+  codeArea.rows = 5;
+  codeArea.readOnly = true;
+  codeArea.style.display = 'none';
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'btn ghost';
+  copyBtn.textContent = 'copy';
+  copyBtn.style.display = 'none';
+  const sendStatus = document.createElement('span');
+  sendStatus.className = 'share-status';
+
+  const sendRow = document.createElement('div');
+  sendRow.className = 'frow';
+  sendRow.appendChild(plSel);
+  sendRow.appendChild(codeBtn);
+  sendWrap.appendChild(sendLabel);
+  sendWrap.appendChild(sendRow);
+  sendWrap.appendChild(codeArea);
+  const sendBtnRow = document.createElement('div');
+  sendBtnRow.className = 'frow';
+  sendBtnRow.appendChild(copyBtn);
+  sendBtnRow.appendChild(sendStatus);
+  sendWrap.appendChild(sendBtnRow);
+  shareCard.appendChild(sendWrap);
+
+  codeBtn.onclick = async () => {
+    if (!plSel.value) return;
+    codeBtn.disabled = true;
+    sendStatus.textContent = 'building…';
+    try {
+      const r = await API('/share/code?playlist_id=' + encodeURIComponent(plSel.value));
+      if (r.status !== 'ok') throw new Error(r.error || 'failed');
+      codeArea.value = r.text || '';
+      codeArea.style.display = '';
+      copyBtn.style.display = '';
+      sendStatus.textContent = '';
+    } catch(e) {
+      sendStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      codeBtn.disabled = false;
+    }
+  };
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(codeArea.value);
+      sendStatus.textContent = 'copied';
+    } catch(e) {
+      codeArea.select();
+      sendStatus.textContent = 'select + copy manually';
+    }
+    setTimeout(() => { sendStatus.textContent = ''; }, 2000);
+  };
+
+  // — Receive half —
+  const recvWrap = document.createElement('div');
+  recvWrap.className = 'share-half';
+  const recvLabel = document.createElement('div');
+  recvLabel.className = 'share-sub';
+  recvLabel.textContent = 'receive';
+  const recvArea = document.createElement('textarea');
+  recvArea.className = 'txt';
+  recvArea.rows = 4;
+  recvArea.placeholder = 'paste a share link or a PLAYLIST: block…';
+  const parseBtn = document.createElement('button');
+  parseBtn.className = 'btn ghost';
+  parseBtn.textContent = 'preview';
+  const recvPreview = document.createElement('div');
+  recvPreview.className = 'share-preview';
+  const recvName = document.createElement('input');
+  recvName.className = 'txt';
+  recvName.type = 'text';
+  recvName.placeholder = 'playlist name';
+  recvName.style.display = 'none';
+  const importBtn = document.createElement('button');
+  importBtn.className = 'btn run';
+  importBtn.textContent = 'import';
+  importBtn.style.display = 'none';
+  const recvBar = makeBar();
+  const recvStatus = document.createElement('span');
+  recvStatus.className = 'share-status';
+
+  recvWrap.appendChild(recvLabel);
+  recvWrap.appendChild(recvArea);
+  const recvBtnRow = document.createElement('div');
+  recvBtnRow.className = 'frow';
+  recvBtnRow.appendChild(parseBtn);
+  recvBtnRow.appendChild(recvStatus);
+  recvWrap.appendChild(recvBtnRow);
+  recvWrap.appendChild(recvPreview);
+  const recvGo = document.createElement('div');
+  recvGo.className = 'frow';
+  recvGo.appendChild(recvName);
+  recvGo.appendChild(importBtn);
+  recvWrap.appendChild(recvGo);
+  recvWrap.appendChild(recvBar);
+  shareCard.appendChild(recvWrap);
+  el.appendChild(shareCard);
+
+  // ── 6. Import playlist ───────────────────────────────────────────────────────
+  const impCard = document.createElement('div');
+  impCard.className = 'tool';
+  impCard.style.cssText = 'flex-direction:column;align-items:stretch;padding:15px 14px 4px';
+  const impHead = document.createElement('div');
+  impHead.className = 't-name';
+  const impTitle = document.createElement('b');
+  impTitle.textContent = 'Import playlist';
+  const impDesc = document.createElement('span');
+  impDesc.textContent = 'Spotify link, Exportify CSV, or "Artist - Title" lines';
+  impHead.appendChild(impTitle);
+  impHead.appendChild(impDesc);
+  impCard.appendChild(impHead);
+
+  const impArea = document.createElement('textarea');
+  impArea.className = 'txt';
+  impArea.rows = 4;
+  impArea.placeholder = 'https://open.spotify.com/playlist/…  — or one "Artist - Title" per line';
+
+  const impFile = document.createElement('input');
+  impFile.type = 'file';
+  impFile.accept = '.csv,text/csv';
+  impFile.className = 'txt';
+
+  const loadBtn = document.createElement('button');
+  loadBtn.className = 'btn ghost';
+  loadBtn.textContent = 'load';
+  const impStatus = document.createElement('span');
+  impStatus.className = 'share-status';
+  const impPreview = document.createElement('div');
+  impPreview.className = 'imp-preview';
+  const impName = document.createElement('input');
+  impName.className = 'txt';
+  impName.type = 'text';
+  impName.placeholder = 'playlist name';
+  impName.style.display = 'none';
+  const impGo = document.createElement('button');
+  impGo.className = 'btn run';
+  impGo.textContent = 'import';
+  impGo.style.display = 'none';
+  const impBar = makeBar();
+
+  impCard.appendChild(impArea);
+  const impFileRow = document.createElement('div');
+  impFileRow.className = 'frow';
+  impFileRow.appendChild(impFile);
+  impCard.appendChild(impFileRow);
+  const impBtnRow = document.createElement('div');
+  impBtnRow.className = 'frow';
+  impBtnRow.appendChild(loadBtn);
+  impBtnRow.appendChild(impStatus);
+  impCard.appendChild(impBtnRow);
+  impCard.appendChild(impPreview);
+  const impGoRow = document.createElement('div');
+  impGoRow.className = 'frow';
+  impGoRow.appendChild(impName);
+  impGoRow.appendChild(impGo);
+  impCard.appendChild(impGoRow);
+  impCard.appendChild(impBar);
+  el.appendChild(impCard);
+
+  let impTracks = [];
+
+  function showImpTracks(tracks, name) {
+    impTracks = tracks;
+    renderTrackPreview(impPreview, impTracks);
+    impName.value = name || 'Import playlist';
+    impName.style.display = '';
+    impGo.style.display = '';
+    impStatus.textContent = impTracks.length + ' tracks';
+  }
+
+  function parseTextLines(text) {
+    return text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+      const i = line.indexOf(' - ');
+      if (i === -1) return {artist: '', title: line};
+      return {artist: line.slice(0, i).trim(), title: line.slice(i + 3).trim()};
+    }).filter(t => t.title);
+  }
+
+  // Minimal RFC4180-ish CSV splitter (Exportify quotes fields containing commas)
+  function csvSplit(line) {
+    const out = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQ) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') inQ = false;
+        else cur += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function parseExportifyCsv(text) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (!lines.length) return [];
+    const header = csvSplit(lines[0]).map(h => h.trim());
+    const ti = header.indexOf('Track Name');
+    const ai = header.indexOf('Artist Name(s)');
+    if (ti === -1) throw new Error('CSV has no "Track Name" column');
+    return lines.slice(1).map(l => {
+      const cols = csvSplit(l);
+      return {
+        artist: ai === -1 ? '' : (cols[ai] || '').trim(),
+        title: (cols[ti] || '').trim(),
+      };
+    }).filter(t => t.title);
+  }
+
+  impFile.onchange = () => {
+    const f = impFile.files && impFile.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const tracks = parseExportifyCsv(String(reader.result || ''));
+        if (!tracks.length) throw new Error('no tracks found in CSV');
+        showImpTracks(tracks, f.name.replace(/\.csv$/i, ''));
+      } catch(e) {
+        impStatus.textContent = 'Error: ' + (e.message || 'bad CSV');
+      }
+    };
+    reader.onerror = () => { impStatus.textContent = 'could not read file'; };
+    reader.readAsText(f);
+  };
+
+  loadBtn.onclick = async () => {
+    const raw = impArea.value.trim();
+    if (!raw) { impStatus.textContent = 'paste a link or some lines first'; return; }
+    loadBtn.disabled = true;
+    impStatus.textContent = 'loading…';
+    impPreview.textContent = '';
+    try {
+      if (/open\.spotify\.com|spotify:playlist:/i.test(raw)) {
+        const r = await API('/spotify/playlist', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url: raw, limit: 200}),
+        });
+        if (r.status === 'unavailable') throw new Error('Spotify unavailable: ' + (r.reason || 'unknown'));
+        if (r.status !== 'ok') throw new Error(r.error || 'spotify fetch failed');
+        const tracks = (r.tracks || []).map(t => ({artist: t.artist || '', title: t.title || ''}))
+                                       .filter(t => t.title);
+        if (!tracks.length) throw new Error('playlist returned no tracks');
+        showImpTracks(tracks, r.name || 'Spotify import');
+      } else {
+        const tracks = parseTextLines(raw);
+        if (!tracks.length) throw new Error('no "Artist - Title" lines found');
+        showImpTracks(tracks, 'Import playlist');
+      }
+    } catch(e) {
+      impStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      loadBtn.disabled = false;
+    }
+  };
+
+  impGo.onclick = async () => {
+    if (!impTracks.length) return;
+    impGo.disabled = true;
+    impBar.style.display = '';
+    try {
+      const name = (impName.value || '').trim() || 'Import playlist';
+      await runImportJob(impTracks, name, impBar._inner, impStatus);
+    } catch(e) {
+      impStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      impGo.disabled = false;
+    }
+  };
+
+  let recvTracks = [];
+  parseBtn.onclick = async () => {
+    const text = recvArea.value.trim();
+    if (!text) return;
+    parseBtn.disabled = true;
+    recvStatus.textContent = 'parsing…';
+    recvPreview.textContent = '';
+    try {
+      const r = await API('/share/parse', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text}),
+      });
+      if (r.status !== 'ok') throw new Error(r.error || 'could not parse');
+      recvTracks = r.tracks || [];
+      renderTrackPreview(recvPreview, recvTracks);
+      recvName.value = r.name || 'Shared';
+      recvName.style.display = '';
+      importBtn.style.display = '';
+      recvStatus.textContent = recvTracks.length + ' tracks';
+    } catch(e) {
+      recvStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      parseBtn.disabled = false;
+    }
+  };
+
+  importBtn.onclick = async () => {
+    if (!recvTracks.length) return;
+    importBtn.disabled = true;
+    recvBar.style.display = '';
+    try {
+      const name = (recvName.value || '').trim() || 'Shared';
+      await runImportJob(recvTracks, name, recvBar._inner, recvStatus);
+    } catch(e) {
+      recvStatus.textContent = 'Error: ' + (e.message || 'unknown');
+    } finally {
+      importBtn.disabled = false;
+    }
+  };
+
+  // Populate the playlist dropdown (after the synchronous appends, per the
+  // no-double-card convention documented in ROADMAP)
+  try {
+    const pls = await API('/playlists');
+    (pls.playlists || []).forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.name + ' (' + (p.songCount || 0) + ')';
+      plSel.appendChild(o);
+    });
+    if (!(pls.playlists || []).length) sendStatus.textContent = 'no playlists found';
+  } catch(e) {
+    sendStatus.textContent = 'playlists unavailable';
+    codeBtn.disabled = true;
+  }
+
+  // Inbound share payload from /share/import
+  if (window.__pendingShare) {
+    recvArea.value = window.__pendingShare;
+    window.__pendingShare = null;
+    parseBtn.click();
+  }
 
   // ── Async status checks (cards already in DOM, just update text) ─────────────
   async function loadSuffixes() {
@@ -939,6 +1642,39 @@ async function renderSearch() {
     meta.appendChild(sub);
     row.appendChild(meta);
 
+    const playBtn = document.createElement('button');
+    playBtn.className = 'play';
+    playBtn.textContent = '▶';
+    const playKey = (item.source || '') + '|' + (item.url || '') + '|' + (item.title || '');
+    function resetPlay() { playBtn.textContent = '▶'; playBtn.classList.remove('on'); }
+    playBtn.onclick = async () => {
+      if (Player.current() === playKey) { Player.stop(); return; }
+      playBtn.disabled = true;
+      playBtn.textContent = '…';
+      try {
+        let data;
+        if (item.source === 'sc') {
+          if (!item.progressive_url) throw new Error('no progressive stream');
+          data = await API('/sc/preview?progressive_url=' + encodeURIComponent(item.progressive_url));
+        } else {
+          data = await API('/preview?source=yt&url=' + encodeURIComponent(item.url || '') +
+                           '&artist=' + encodeURIComponent(item.artist || '') +
+                           '&title=' + encodeURIComponent(item.title || ''));
+        }
+        if (data.status !== 'ok' || !data.stream_url) throw new Error(data.reason || 'unavailable');
+        playBtn.textContent = '❚❚';
+        playBtn.classList.add('on');
+        Player.play(playKey, data.stream_url,
+                    [item.artist, item.title].filter(Boolean).join(' — '), resetPlay);
+      } catch(e) {
+        playBtn.textContent = '!';
+        setTimeout(resetPlay, 2000);
+      } finally {
+        playBtn.disabled = false;
+      }
+    };
+    row.appendChild(playBtn);
+
     const getBtn = document.createElement('button');
     getBtn.className = 'get';
     getBtn.textContent = '+';
@@ -987,6 +1723,7 @@ async function renderSearch() {
       duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
       url: t.permalink_url || '',
       artwork_url: t.artwork_url || null,
+      progressive_url: t.progressive_url || '',
     };
   }
 
@@ -1247,6 +1984,7 @@ async function renderSearch() {
           duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
           url: t.permalink_url || '',
           artwork_url: t.artwork_url || null,
+          progressive_url: t.progressive_url || '',
         };
         if (item.url) allResults.push(buildResultRow(item));
       });
@@ -1765,16 +2503,36 @@ async function renderFollows() {
   runBtn.className = 'btn run';
   runBtn.style.marginBottom = '10px';
   runBtn.textContent = '▶ run now';
+  // /follow/run dispatches in the background (a run can take minutes via
+  // sync_playlist's playlist scan waits) and answers 'started' immediately —
+  // poll /follow's state.last_run for completion instead of reading
+  // acquired/unavailable off a synchronous response that no longer exists.
+  async function pollFollowRunDone(prevLastRun, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 5 * 60 * 1000);
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 3000));
+      try {
+        const s = await API('/follow');
+        const lastRun = (s.state || {}).last_run;
+        if (lastRun && lastRun !== prevLastRun) return true;
+      } catch(e) {}
+    }
+    return false;
+  }
+
   runBtn.onclick = async () => {
     runBtn.disabled = true;
     runBtn.textContent = '…';
     showStatus(runStatus, 'Running…');
     try {
+      const before = await API('/follow');
+      const prevLastRun = (before.state || {}).last_run;
       const r = await API('/follow/run', {method: 'POST'});
       if (r.status === 'disabled') {
         showStatus(runStatus, 'Disabled — Navidrome credentials missing.');
       } else {
-        showStatus(runStatus, 'Done. acquired: ' + (r.acquired || 0) + ', unavailable: ' + (r.unavailable || 0));
+        const done = await pollFollowRunDone(prevLastRun);
+        showStatus(runStatus, done ? 'Done — feed refreshed.' : 'Still running — check back shortly.');
         loadFeed();
       }
     } catch(e) {
@@ -2192,7 +2950,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Follows badge — fetch unseen count on init
   initFollowsBadge();
 
+  // Inbound share link: /share/import redirects here as /?share=<payload>#library
+  const params = new URLSearchParams(location.search);
+  const sharePayload = params.get('share');
+  let forced = null;
+  if (sharePayload) {
+    window.__pendingShare = '?d=' + sharePayload;   // decode() matches [?&]d=
+    forced = 'library';
+    params.delete('share');
+    const qs = params.toString();
+    history.replaceState({}, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+  }
+
   // Initial screen
-  const initial = location.hash.slice(1);
+  const initial = forced || location.hash.slice(1);
   show(screens[initial] ? initial : 'mixes');
 });

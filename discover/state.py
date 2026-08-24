@@ -8,13 +8,19 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TTL_DAYS = 90
 
 
+def blank_ledger() -> dict:
+    return {"playlist_id": "", "owned": [], "pending": [], "migrated": False}
+
+
 class DiscoverState:
-    def __init__(self, path: str, suggested: dict, last_run=None, ttl_days: int = _DEFAULT_TTL_DAYS):
+    def __init__(self, path: str, suggested: dict, last_run=None,
+                 ttl_days: int = _DEFAULT_TTL_DAYS, playlists: dict = None):
         self._path = path
         # suggested: dict[key -> iso_timestamp_str]
         self._suggested = suggested
         self._last_run = last_run
         self._ttl_days = ttl_days
+        self._playlists = playlists if isinstance(playlists, dict) else {}
 
     def has(self, key: str) -> bool:
         ts = self._suggested.get(key)
@@ -28,6 +34,16 @@ class DiscoverState:
 
     def add(self, key: str) -> None:
         self._suggested[key] = datetime.datetime.now().isoformat()
+
+    def playlist_ledger(self, name: str) -> dict:
+        """Mutable per-playlist merge ledger. Created blank on first access."""
+        led = self._playlists.get(name)
+        if not isinstance(led, dict):
+            led = blank_ledger()
+            self._playlists[name] = led
+        for k, v in blank_ledger().items():
+            led.setdefault(k, v)
+        return led
 
     @property
     def last_run(self):
@@ -58,7 +74,8 @@ class DiscoverState:
         file_suggested = {k: ts for k, ts in file_suggested.items()
                           if _within_ttl(ts, self._ttl_days, now)}
         merged_suggested = {**file_suggested, **pruned}
-        existing.update({"suggested": merged_suggested, "last_run": self._last_run})
+        existing.update({"suggested": merged_suggested, "last_run": self._last_run,
+                         "playlists": {**(existing.get("playlists") or {}), **self._playlists}})
 
         tmp = self._path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -77,12 +94,14 @@ def _within_ttl(ts: str, ttl_days: int, now: datetime.datetime) -> bool:
 def load_state(path: str, ttl_days: int = _DEFAULT_TTL_DAYS) -> DiscoverState:
     suggested: dict = {}
     last_run = None
+    playlists: dict = {}
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 d = json.load(f)
             raw = d.get("suggested", []) or []
             last_run = d.get("last_run")
+            playlists = d.get("playlists") or {}
 
             if isinstance(raw, dict):
                 suggested = raw
@@ -92,4 +111,5 @@ def load_state(path: str, ttl_days: int = _DEFAULT_TTL_DAYS) -> DiscoverState:
                 suggested = {k: now_ts for k in raw if isinstance(k, str)}
         except Exception:
             logger.warning("load_state: could not read %s, starting empty", path)
-    return DiscoverState(path, suggested, last_run=last_run, ttl_days=ttl_days)
+    return DiscoverState(path, suggested, last_run=last_run, ttl_days=ttl_days,
+                         playlists=playlists if isinstance(playlists, dict) else {})
