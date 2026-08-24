@@ -81,3 +81,91 @@ def test_merge_does_not_mutate_its_inputs():
     current, owned, new = ["e1"], ["e1"], ["e2"]
     merge_playlist(current, owned, new, cap=1)
     assert current == ["e1"] and owned == ["e1"] and new == ["e2"]
+
+
+from types import SimpleNamespace
+from discover.playlist_sync import wait_for_scan, resolve_paths
+
+
+def _tags(mapping):
+    return lambda path: mapping.get(path, ("", ""))
+
+
+def test_wait_for_scan_triggers_scan_and_polls_until_idle():
+    calls = {"scan": 0, "status": 0}
+
+    def status():
+        calls["status"] += 1
+        return {"scanning": calls["status"] < 3, "count": 1}
+
+    sub = SimpleNamespace(start_scan=lambda: calls.__setitem__("scan", calls["scan"] + 1) or True,
+                          get_scan_status=status)
+    slept = []
+    assert wait_for_scan(sub, timeout=60, poll=1, sleep_fn=slept.append) is True
+    assert calls["scan"] == 1
+    assert calls["status"] == 3
+
+
+def test_wait_for_scan_gives_up_at_timeout():
+    sub = SimpleNamespace(start_scan=lambda: True,
+                          get_scan_status=lambda: {"scanning": True, "count": 0})
+    ticks = iter([0, 10, 20, 30, 40, 50, 60, 70])
+    assert wait_for_scan(sub, timeout=30, poll=10, sleep_fn=lambda s: None,
+                         clock=lambda: next(ticks)) is False
+
+
+def test_wait_for_scan_tolerates_client_without_scan_status():
+    sub = SimpleNamespace(start_scan=lambda: True)
+    slept = []
+    assert wait_for_scan(sub, timeout=30, poll=1, sleep_fn=slept.append) is False
+    assert slept   # fell back to a fixed sleep
+
+
+def test_resolve_paths_requires_both_title_and_artist_to_match():
+    sub = SimpleNamespace(search_songs=lambda query, count=5: [
+        {"id": "wrong", "title": "Track One", "artist": "Someone Else"},
+        {"id": "right", "title": "Track One", "artist": "Artist A"},
+    ])
+    ids, unresolved = resolve_paths(sub, ["/m/1.mp3"],
+                                    tag_reader=_tags({"/m/1.mp3": ("Artist A", "Track One")}))
+    assert ids == ["right"]
+    assert unresolved == []
+
+
+def test_resolve_paths_rejects_title_only_match():
+    sub = SimpleNamespace(search_songs=lambda query, count=5: [
+        {"id": "x", "title": "Track One", "artist": "Someone Else"},
+    ])
+    ids, unresolved = resolve_paths(sub, ["/m/1.mp3"],
+                                    tag_reader=_tags({"/m/1.mp3": ("Artist A", "Track One")}))
+    assert ids == []
+    assert unresolved == ["/m/1.mp3"]
+
+
+def test_resolve_paths_falls_back_to_basename_path_match():
+    sub = SimpleNamespace(search_songs=lambda query, count=5: [
+        {"id": "p", "title": "", "artist": "", "path": "sub/dir/1.mp3"},
+    ])
+    ids, unresolved = resolve_paths(sub, ["/m/1.mp3"], tag_reader=_tags({}))
+    assert ids == ["p"]
+    assert unresolved == []
+
+
+def test_resolve_paths_dedupes_and_preserves_order():
+    sub = SimpleNamespace(search_songs=lambda query, count=5: [
+        {"id": "s", "title": "T", "artist": "A"},
+    ])
+    ids, unresolved = resolve_paths(sub, ["/m/1.mp3", "/m/2.mp3"],
+                                    tag_reader=_tags({"/m/1.mp3": ("A", "T"),
+                                                      "/m/2.mp3": ("A", "T")}))
+    assert ids == ["s"]
+
+
+def test_resolve_paths_survives_search_exception():
+    def boom(query, count=5):
+        raise RuntimeError("nd down")
+    sub = SimpleNamespace(search_songs=boom)
+    ids, unresolved = resolve_paths(sub, ["/m/1.mp3"],
+                                    tag_reader=_tags({"/m/1.mp3": ("A", "T")}))
+    assert ids == []
+    assert unresolved == ["/m/1.mp3"]
