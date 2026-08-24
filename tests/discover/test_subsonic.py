@@ -172,7 +172,10 @@ def test_get_playlist_song_ids_empty_when_no_entries():
     assert c.get_playlist_song_ids("1") == []
 
 
-def test_replace_playlist_sends_playlist_id_and_all_songs():
+def test_replace_playlist_sends_playlist_id_and_repeated_song_id_params():
+    """Subsonic spec requires repeated songId=a&songId=b, NOT bracket-indexed
+    songId[0]=a&songId[1]=b — Navidrome reads p.Strings("songId") by exact key
+    and silently ignores bracket-indexed params, wiping the playlist."""
     seen = {}
 
     def fake_fetch(url):
@@ -183,9 +186,43 @@ def test_replace_playlist_sends_playlist_id_and_all_songs():
     c = Subsonic("http://nd:4533", "u", "p", fetch_json=fake_fetch)
     assert c.replace_playlist("42", ["s1", "s2"]) is True
     assert "playlistId=42" in seen["url"]
-    assert "songId%5B0%5D=s1" in seen["url"]
-    assert "songId%5B1%5D=s2" in seen["url"]
+    assert "songId%5B0%5D" not in seen["url"]
+    assert "songId%5B1%5D" not in seen["url"]
+    assert "songId=s1" in seen["url"]
+    assert "songId=s2" in seen["url"]
     assert "name=" not in seen["url"]
+
+
+def test_replace_playlist_empty_song_list_sends_no_song_id_param():
+    seen = {}
+
+    def fake_fetch(url):
+        seen["url"] = url
+        return {"subsonic-response": {"status": "ok"}}
+
+    from discover.subsonic import Subsonic
+    c = Subsonic("http://nd:4533", "u", "p", fetch_json=fake_fetch)
+    assert c.replace_playlist("42", []) is True
+    assert "songId" not in seen["url"]
+
+
+def test_create_or_update_playlist_sends_repeated_song_id_params_too(monkeypatch):
+    """create_or_update_playlist (used by the import job) had its own separate
+    copy of the bracket-indexed songId bug — must be fixed the same way."""
+    seen = {}
+
+    def fake_fetch(url):
+        if "getPlaylists" in url:
+            return {"subsonic-response": {"playlists": {}}}
+        seen["url"] = url
+        return {"subsonic-response": {"status": "ok", "playlist": {"id": "1"}}}
+
+    from discover.subsonic import Subsonic
+    c = Subsonic("http://nd:4533", "u", "p", fetch_json=fake_fetch)
+    c.create_or_update_playlist("New", ["s1", "s2"])
+    assert "songId%5B0%5D" not in seen["url"]
+    assert "songId=s1" in seen["url"]
+    assert "songId=s2" in seen["url"]
 
 
 def test_create_playlist_returns_new_id():

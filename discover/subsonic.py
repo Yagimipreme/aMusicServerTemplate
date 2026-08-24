@@ -26,7 +26,11 @@ class Subsonic:
             "v": _API_VERSION, "c": _CLIENT, "f": "json",
         }
         base.update({k: v for k, v in params.items() if v is not None})
-        return f"{self.host}/rest/{view}?{urllib.parse.urlencode(base)}"
+        # doseq=True: a list-valued param (e.g. songId=[a, b]) is expanded into
+        # repeated songId=a&songId=b — the actual Subsonic-spec form. Navidrome
+        # reads repeated params via params.Strings("songId"); it does not
+        # understand bracket-indexed keys like songId[0]=a.
+        return f"{self.host}/rest/{view}?{urllib.parse.urlencode(base, doseq=True)}"
 
     def _call(self, view: str, **params) -> dict:
         data = self._fetch_json(self._url(view, **params))
@@ -169,7 +173,11 @@ class Subsonic:
         return sr.get("status") == "ok"
 
     def _playlist_song_params(self, song_ids) -> dict:
-        return {f"songId[{i}]": sid for i, sid in enumerate(song_ids)}
+        """A single 'songId' param whose value is a list — _url() expands this
+        with doseq=True into repeated songId=a&songId=b query params, which is
+        the form Navidrome's Subsonic API actually reads."""
+        ids = list(song_ids or [])
+        return {"songId": ids} if ids else {}
 
     def replace_playlist(self, playlist_id: str, song_ids: list) -> bool:
         """Overwrite an existing playlist's contents, keeping its identity.
@@ -218,7 +226,7 @@ class Subsonic:
 
         # Create fresh
         params = {"name": name}
-        params.update({f"songId[{i}]": sid for i, sid in enumerate(song_ids)})
+        params.update(self._playlist_song_params(song_ids))
         sr = self._call("createPlaylist.view", **params)
         pl = sr.get("playlist", {}) or {}
         return pl.get("id", "")
