@@ -91,6 +91,8 @@ JUNK_EXTS = (
     '.mp4', '.mkv', '.m4a', '.webm', '.opus', '.temp.mp3',
 )
 
+_MTIME_SLACK_S = 2.0
+
 
 def _is_playlist_url(url: str) -> bool:
     """True only for /playlist?list= URLs. /watch?v=X&list=Y stays single-video."""
@@ -98,8 +100,11 @@ def _is_playlist_url(url: str) -> bool:
 
 
 def _cleanup_orphans(out_dir: str, since_ts: float):
-    """Remove non-mp3 download artifacts created during this request.
+    """Remove download artifacts created during this request.
 
+    Covers non-mp3 leftovers and empty .mp3 files — the latter appear when the
+    final move from the temp dir fails mid-copy (e.g. ENOSPC on the NAS) and
+    would otherwise be indexed by Navidrome as unplayable tracks.
     We use mtime > since_ts so we never touch files from other downloads
     or pre-existing music in the same folder.
     """
@@ -109,12 +114,15 @@ def _cleanup_orphans(out_dir: str, since_ts: float):
             try:
                 if not os.path.isfile(full):
                     continue
-                if os.path.getmtime(full) < since_ts:
+                # Filesystem timestamps use a coarse kernel clock and can read
+                # a few ms earlier than the time.time() taken before creation.
+                if os.path.getmtime(full) < since_ts - _MTIME_SLACK_S:
                     continue
+                empty_mp3 = fn.lower().endswith('.mp3') and os.path.getsize(full) == 0
             except OSError:
                 continue
             low = fn.lower()
-            if any(low.endswith(e) for e in JUNK_EXTS):
+            if empty_mp3 or any(low.endswith(e) for e in JUNK_EXTS):
                 try:
                     os.remove(full)
                     logger.info('cleanup: removed %s', fn)
@@ -197,7 +205,7 @@ def download_url(url: str, out_dir: str) -> tuple[str | None, list[str]]:
                 fn = ydl.prepare_filename(entry)
                 base, _ = os.path.splitext(fn)
                 mp3 = base + ".mp3"
-                if os.path.exists(mp3):
+                if os.path.isfile(mp3) and os.path.getsize(mp3) > 0:
                     mp3_paths.append(mp3)
     except Exception as e:
         print(f"[ERROR] Download failed: {e}")

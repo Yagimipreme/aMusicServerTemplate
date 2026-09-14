@@ -6,6 +6,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _URL = "https://api.listenbrainz.org/1/explore/fresh-releases/"
+_MAX_DAYS = 90  # API returns HTTP 400 "days must be between 1 and 90."
 _TIMEOUT = 10
 _USER_AGENT = "aMusicServer/1.0 (https://github.com/Yagimipreme/aMusicServer)"
 
@@ -18,7 +19,7 @@ class ListenBrainzClient:
                        past: bool = True, future: bool = False) -> list:
         params = {
             "release_date": pivot_date,
-            "days": days,
+            "days": max(1, min(int(days), _MAX_DAYS)),
             "past": "true" if past else "false",
             "future": "true" if future else "false",
         }

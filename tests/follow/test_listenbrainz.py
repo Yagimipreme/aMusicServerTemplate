@@ -50,6 +50,16 @@ def test_fresh_releases_parses_and_passes_params():
     assert params["future"] == "false"
 
 
+def test_fresh_releases_clamps_days_to_api_range():
+    # ListenBrainz rejects days outside 1..90 with HTTP 400 ("days must be
+    # between 1 and 90."), which silently empties the whole follow run.
+    fake = FakeSession({})
+    client = lb.ListenBrainzClient(session=fake)
+    client.fresh_releases(pivot_date="2026-09-14", days=307)
+    client.fresh_releases(pivot_date="2026-09-14", days=0)
+    assert [p["days"] for _, p in fake.calls] == [90, 1]
+
+
 def test_fresh_releases_handles_missing_payload():
     client = lb.ListenBrainzClient(session=FakeSession({}))
     assert client.fresh_releases(pivot_date="2026-06-14", days=7) == []
