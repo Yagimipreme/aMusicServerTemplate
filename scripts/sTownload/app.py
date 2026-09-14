@@ -76,7 +76,6 @@ def get_song(search_query: str, output_title: str) -> bool:
         'writethumbnail': True,
         'quiet': True,
         'no_warnings': True,
-        'extractor_args': {'youtube': {'player_client': ['android']}},
         'postprocessors': [
             {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'},
             {'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg'},

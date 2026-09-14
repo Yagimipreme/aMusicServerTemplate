@@ -173,7 +173,6 @@ def download_url(url: str, out_dir: str) -> tuple[str | None, list[str]]:
         "no_warnings": True,
         "retries": 10,
         "concurrent_fragment_downloads": 5,
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
 
         "writethumbnail": True,
         "postprocessors": [

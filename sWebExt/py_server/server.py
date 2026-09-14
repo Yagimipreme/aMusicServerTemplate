@@ -2273,7 +2273,9 @@ def preview():
             query = url if url else f"ytsearch:{artist} {title}"
             try:
                 result = subprocess.run(
-                    [_YT_DLP, "--dump-json", "-f", "bestaudio/best",
+                    # M4A first: YouTube's default bestaudio is WebM/Opus,
+                    # which iOS Safari cannot play in <audio>.
+                    [_YT_DLP, "--dump-json", "-f", "bestaudio[ext=m4a]/bestaudio/best",
                      "--no-playlist", query],
                     capture_output=True, text=True, timeout=20,
                     cwd=_PROJECT_ROOT,

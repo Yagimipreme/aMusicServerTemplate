@@ -1610,6 +1610,24 @@ def test_preview_route_uses_resolved_yt_dlp_binary(client):
     assert ".venv/bin/yt-dlp" not in srun.call_args.args[0][0]
 
 
+def test_preview_route_prefers_m4a_audio_over_webm(client):
+    """YouTube's default bestaudio is WebM/Opus, which phone browsers such as
+    iOS Safari cannot play in <audio>. /preview must ask yt-dlp for M4A first
+    and fall back to any audio only when M4A is unavailable."""
+    import subprocess as _sp
+    completed = _sp.CompletedProcess(
+        args=[], returncode=0,
+        stdout=json.dumps({"url": "https://stream", "title": "T", "uploader": "A"}),
+        stderr="")
+    with patch("subprocess.run", return_value=completed) as srun:
+        resp = client.get("/preview?source=yt&url=https://www.youtube.com/watch?v=x")
+    assert resp.status_code == 200
+    argv = srun.call_args.args[0]
+    fmt = argv[argv.index("-f") + 1]
+    assert fmt.split("/")[0] == "bestaudio[ext=m4a]"
+    assert "bestaudio" in fmt.split("/")[1:]
+
+
 # ── /follow/run dispatches in the background ──────────────────────────────────
 
 def test_follow_run_dispatches_in_background_not_synchronously(client):
