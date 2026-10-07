@@ -18,6 +18,7 @@ import uuid
 
 from flask import Flask, jsonify, redirect, render_template, request
 from flask_cors import CORS
+from werkzeug.serving import make_server
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
@@ -2550,7 +2551,16 @@ def _start_zeroconf(hostname: str, port: int = 5000):
 def start_background_server(port: int = 5000):
     logger.info("Server starting on port %d (pid=%d, root=%s)", port, os.getpid(), _PROJECT_ROOT)
 
-    t_ref = threading.Thread(target=_refresh_sc_client_id_loop, args=(3600,), daemon=True)
+    # Bind before spawning any background thread. If the port is taken we must
+    # exit while nothing is running: the client_id refresh launches Chromium,
+    # and a daemon thread killed at interpreter exit leaks its /tmp profile.
+    try:
+        httpd = make_server("0.0.0.0", port, app, threaded=True)
+    except OSError as e:
+        logger.error("Cannot bind port %d (%s) — another instance running? Exiting.", port, e)
+        sys.exit(1)
+
+    t_ref =threading.Thread(target=_refresh_sc_client_id_loop, args=(3600,), daemon=True)
     t_ref.start()
 
     t_mix = threading.Thread(target=_mix_scheduler_loop, daemon=True)
@@ -2568,7 +2578,7 @@ def start_background_server(port: int = 5000):
     hostname = _cfg_at_start.get("hostname", "amusicserver.local")
     _start_zeroconf(hostname, port)
 
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    httpd.serve_forever()
 
 
 if __name__ == "__main__":

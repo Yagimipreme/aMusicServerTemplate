@@ -10,6 +10,7 @@ import time
 import logging
 import re
 import shutil
+import tempfile
 from urllib.parse import urlparse, urlunparse
 from requests.exceptions import HTTPError
 import requests
@@ -39,6 +40,12 @@ logger = logging.getLogger('sc_download_web')
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "../../"))
 _CONFIG_PATH  = os.path.join(_PROJECT_ROOT, "config.json")
+
+# Chromium profiles for the client_id scrape. We own these instead of letting
+# chromedriver create /tmp/org.chromium.Chromium.scoped_dir.*, which leaks
+# whenever the process dies before driver.quit() (daemon thread at exit, kill).
+_SELENIUM_PROFILE_ROOT = os.path.join(tempfile.gettempdir(), "amst-selenium")
+_SELENIUM_PROFILE_MAX_AGE = 3600
 
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
@@ -85,6 +92,22 @@ def sanitize_request_url(u: str) -> str:
 
 # ── Selenium client_id fetch ───────────────────────────────────────────────────
 
+def _sweep_stale_selenium_profiles():
+    """Remove profile dirs left behind by scrapes that were killed mid-run."""
+    try:
+        names = os.listdir(_SELENIUM_PROFILE_ROOT)
+    except FileNotFoundError:
+        return
+    cutoff = time.time() - _SELENIUM_PROFILE_MAX_AGE
+    for name in names:
+        path = os.path.join(_SELENIUM_PROFILE_ROOT, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+
+
 def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
     """Open Chrome headless, sniff network logs for a SoundCloud client_id."""
     if webdriver is None:
@@ -98,18 +121,29 @@ def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
     options.add_argument('--disable-dev-shm-usage')
     options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
+    # One owned dir per run holds the profile and Chromium's TMPDIR (it writes
+    # url_fetcher_* temp dirs there even with --user-data-dir set).
+    _sweep_stale_selenium_profiles()
+    os.makedirs(_SELENIUM_PROFILE_ROOT, exist_ok=True)
+    profile_dir = tempfile.mkdtemp(prefix='profile-', dir=_SELENIUM_PROFILE_ROOT)
+    chrome_tmp = os.path.join(profile_dir, 'tmp')
+    os.makedirs(chrome_tmp)
+    options.add_argument(f"--user-data-dir={os.path.join(profile_dir, 'user-data')}")
+    service_env = {**os.environ, 'TMPDIR': chrome_tmp}
+
     # Prefer the system chromedriver — on Arch/Debian it is kept version-matched
     # to the installed browser by the package manager.  webdriver_manager caches
     # a specific version that can become stale (e.g. v114 vs Chromium 145).
     system_cd = shutil.which('chromedriver')
     if system_cd:
         logger.debug('[SC-SELENIUM] Using system chromedriver: %s', system_cd)
-        service = ChromeService(system_cd)
+        service = ChromeService(system_cd, env=service_env)
     elif ChromeDriverManager is not None:
         logger.debug('[SC-SELENIUM] System chromedriver not found, using webdriver_manager')
-        service = ChromeService(ChromeDriverManager().install())
+        service = ChromeService(ChromeDriverManager().install(), env=service_env)
     else:
         logger.error('[SC-SELENIUM] No chromedriver available')
+        shutil.rmtree(profile_dir, ignore_errors=True)
         return None
 
     # Also resolve the browser binary explicitly so Selenium finds Chromium
@@ -127,6 +161,7 @@ def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
         driver = webdriver.Chrome(service=service, options=options)
     except Exception:
         logger.exception('[SC-SELENIUM] Failed to start ChromeDriver')
+        shutil.rmtree(profile_dir, ignore_errors=True)
         return None
 
     try:
@@ -174,6 +209,7 @@ def fetch_client_id_via_selenium(target_url: str | None = None) -> str | None:
             driver.quit()
         except Exception:
             pass
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 # ── Download ───────────────────────────────────────────────────────────────────
